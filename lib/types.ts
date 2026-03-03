@@ -155,17 +155,7 @@ export type PostWithStats = Post & {
 };
 
 /** Subscriber with spending details */
-export type SubscriberWithDetails = Subscription & {
-  user: {
-    id:        string;
-    name:      string;
-    email:     string;
-    username:  string;
-    avatarUrl: string | null;
-  };
-  totalSpent: number;
-  tipCount:   number;
-};
+
 
 /** Tip with sender info */
 export type TipWithSender = Tip & {
@@ -211,17 +201,7 @@ export type PostWithAccess = Post & {
 };
 
 /** Subscription with creator details */
-export type SubscriptionWithCreator = Subscription & {
-  creator: {
-    id:   string;
-    user: {
-      displayName: string;
-      username:    string;
-      avatarUrl:   string | null;
-    };
-  };
-  unreadMessages: number;
-};
+
 
 /** Creator card for discovery */
 export type CreatorCardData = {
@@ -375,3 +355,45 @@ export interface DbUser extends SessionUser {
   banReason?: string | null;
   banExpires?: Date | null;
 }
+
+
+// lib/types.ts (ADD THESE TO YOUR EXISTING TYPES FILE)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SUBSCRIPTION TYPES
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Subscriber with full details (for creators viewing their subscribers)
+ */
+export type SubscriberWithDetails = {
+  subscriptionId: string;
+  userId: string;
+  name: string;
+  username: string;
+  email: string;
+  avatarUrl: string | null;
+  tier: "standard" | "vip";
+  status: string;
+  totalSpent: number;
+  tipCount: number;
+  subscribedAt: Date;
+};
+
+/**
+ * Subscription with creator details (for users viewing their subscriptions)
+ */
+export type SubscriptionWithCreator = {
+  subscriptionId: string;
+  tier: "standard" | "vip";
+  status: string;
+  price: number;
+  nextBillingDate: Date | null;
+  subscribedAt: Date;
+  creatorUserId: string;
+  creatorName: string;
+  creatorUsername: string;
+  creatorAvatarUrl: string | null;
+  creatorCoverUrl: string | null;
+  unreadMessageCount: number;
+};

@@ -1,16 +1,39 @@
-// components/dashboard/Topbar.tsx
 "use client";
 
 import { useState } from "react";
 import type { SessionUser } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import { signOut } from "@/lib/auth/client";
 
 interface TopbarProps {
-  user:        SessionUser;
+  user: SessionUser;
   onMenuClick: () => void;
 }
 
 export function Topbar({ user, onMenuClick }: TopbarProps) {
   const [query, setQuery] = useState("");
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const router = useRouter();
+
+  async function handleSignOut() {
+    setIsSigningOut(true);
+    try {
+      await signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            router.push("/login");
+          },
+          onError: (error) => {
+            console.error("Sign out failed:", error);
+            setIsSigningOut(false);
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Sign out error:", error);
+      setIsSigningOut(false);
+    }
+  }
 
   return (
     <header
@@ -28,7 +51,10 @@ export function Topbar({ user, onMenuClick }: TopbarProps) {
           <h1 className="text-white font-black text-lg leading-none">Dashboard</h1>
           <p className="text-gray-500 text-xs mt-0.5">
             {new Date().toLocaleDateString("en-US", {
-              weekday: "long", year: "numeric", month: "long", day: "numeric"
+              weekday: "long",
+              year: "numeric",
+              month: "long",
+              day: "numeric",
             })}
           </p>
         </div>
@@ -39,11 +65,13 @@ export function Topbar({ user, onMenuClick }: TopbarProps) {
         <div className="relative">
           <input
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Search…"
             className="bg-[#0d0d1f] border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-gray-300 placeholder:text-gray-600 outline-none focus:border-white/20 w-44"
           />
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 text-xs">🔍</span>
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 text-xs">
+            🔍
+          </span>
         </div>
 
         {/* Notification bell */}
@@ -56,6 +84,15 @@ export function Topbar({ user, onMenuClick }: TopbarProps) {
         <div className="w-9 h-9 rounded-full bg-indigo-500/25 flex items-center justify-center text-xs font-black text-indigo-400 cursor-pointer">
           {user.name.slice(0, 2).toUpperCase()}
         </div>
+
+        {/* Sign Out */}
+        <button
+          onClick={handleSignOut}
+          disabled={isSigningOut}
+          className="px-3 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+        >
+          {isSigningOut ? "Signing out…" : "Sign Out"}
+        </button>
       </div>
     </header>
   );

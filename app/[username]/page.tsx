@@ -1,5 +1,8 @@
+// app/[username]/page.tsx
+// Public creator profile page - Next.js 15 compatible
+
 import { notFound } from "next/navigation";
-import { auth } from "@/app/lib/auth";
+import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { ProfilePage } from "@/components/profile-page";
 import { getProfileByUsername } from "@/actions/profile-actions";
@@ -11,7 +14,10 @@ interface ProfilePageProps {
 }
 
 export default async function UserProfilePage({ params }: ProfilePageProps) {
+  // In Next.js 15, params IS a Promise and must be awaited
   const { username } = await params;
+  
+  console.log('[Profile] Loading profile for:', username);
   
   const session = await auth.api.getSession({
     headers: await headers(),
@@ -20,6 +26,7 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
   const result = await getProfileByUsername(username);
 
   if (!result.success || !result.data) {
+    console.log('[Profile] Profile not found for:', username);
     notFound();
   }
 
@@ -43,7 +50,11 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
 
 // Generate metadata for the page
 export async function generateMetadata({ params }: ProfilePageProps) {
+  // MUST await params in Next.js 15
   const { username } = await params;
+  
+  console.log('[Metadata] Generating metadata for:', username);
+  
   const result = await getProfileByUsername(username);
 
   if (!result.success || !result.data) {
@@ -55,7 +66,7 @@ export async function generateMetadata({ params }: ProfilePageProps) {
   const { profile } = result.data;
 
   return {
-    title: `${profile.username} (@${profile.username})`,
-    description: profile.avatarUrl || `Check out ${profile.username}'s profile`,
+    title: `${profile.username} - FanVault`,
+    description: profile.username || `Check out ${profile.username}'s profile on FanVault`,
   };
 }

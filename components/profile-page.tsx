@@ -1,6 +1,6 @@
 "use client";
 
-import { profiles, creatorAccounts } from "@/db/schema";
+import { profiles, creators } from "@/db/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -22,7 +22,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 type Profile = InferSelectModel<typeof profiles>;
-type CreatorAccount = InferSelectModel<typeof creatorAccounts>;
+type CreatorAccount = InferSelectModel<typeof creators>;
 
 
 
@@ -39,7 +39,7 @@ export function ProfilePage({
   isOwnProfile,
   isSubscribed = false,
 }: ProfilePageProps) {
-  const isCreator = creatorAccount?.status === "approved";
+  const isCreator = creators?.status === "active";
   const subscriptionPrice = creatorAccount?.subscriptionPrice
     ? (parseInt(creatorAccount.subscriptionPrice) / 100).toFixed(2)
     : null;
@@ -74,14 +74,14 @@ export function ProfilePage({
             <Avatar className="h-32 w-32 border-4 border-background">
               <AvatarImage src={profile.avatarUrl || undefined} />
               <AvatarFallback className="text-3xl">
-                {profile.displayName.charAt(0).toUpperCase()}
+                {profile.username.charAt(0).toUpperCase()}
               </AvatarFallback>
             </Avatar>
 
             {/* Name and username */}
             <div className="flex-1">
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">{profile.displayName}</h1>
+                <h1 className="text-2xl font-bold">{profile.username}</h1>
                 {isCreator && (
                   <CheckCircle className="h-5 w-5 text-blue-500" />
                 )}
@@ -141,8 +141,8 @@ export function ProfilePage({
 
           {/* Bio and info */}
           <div className="mt-4 space-y-3">
-            {profile.bio && (
-              <p className="text-sm whitespace-pre-wrap">{profile.bio}</p>
+            {profile.username && (
+              <p className="text-sm whitespace-pre-wrap">{profile.username}</p>
             )}
 
             <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">

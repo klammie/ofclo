@@ -83,15 +83,26 @@ export const cryptoPayStatusEnum  = pgEnum("crypto_pay_status", ["initiated","pe
 // Extended profile data that BetterAuth's `user` table doesn't store.
 // One-to-one with BetterAuth's user.id.
 export const profiles = pgTable("profiles", {
-  id:            text("id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
-  username:      text("username").notNull().unique(),
-  avatarUrl:     text("avatar_url"),
-  walletBalance: decimal("wallet_balance", { precision: 12, scale: 2 }).notNull().default("0.00"),
-  createdAt:     timestamp("created_at").notNull().defaultNow(),
-  updatedAt:     timestamp("updated_at").notNull().defaultNow(),
+  id:              text("id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  creatorId:       text("creator_id").notNull(),
+  userId:          text("user_id").notNull(),
+  name:            text("name").notNull(),
+  username:        text("username").notNull().unique(),
+  avatarUrl:       text("avatar_url"),
+  coverUrl:        text("cover_url"),
+  bio:             text("bio"),
+  isVerified:      boolean("is_verified").notNull().default(false),
+  subscriberCount: integer("subscriber_count").notNull().default(0),
+  postCount:       integer("post_count").notNull().default(0),
+  standardPrice:   text("standard_price").notNull(),
+  vipPrice:        text("vip_price").notNull(),
+  isSubscribed:    boolean("is_subscribed").notNull().default(false),
+  walletBalance:   decimal("wallet_balance", { precision: 12, scale: 2 }).notNull().default("0.00"),
+  createdAt:       timestamp("created_at").notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
   usernameIdx: uniqueIndex("profiles_username_idx").on(t.username),
-}));
+}));``
 
 // ── agencies ──────────────────────────────────────────────────────────────────
 export const agencies = pgTable("agencies", {
@@ -153,6 +164,35 @@ export const posts = pgTable("posts", {
   creatorIdIdx: index("posts_creator_id_idx").on(t.creatorId),
   createdAtIdx: index("posts_created_at_idx").on(t.createdAt),
 }));
+
+// ── Likes ─────────────────────────────────────────────────────────────
+
+export const likes = pgTable("likes", {
+  id:        uuid("id").defaultRandom().primaryKey(),
+  userId:    text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  postId:    uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => ({
+  userPostUnique: uniqueIndex("likes_user_post_unique").on(t.userId, t.postId),
+  postIdx:        uniqueIndex("likes_post_idx").on(t.postId),
+}));
+
+
+// ── Comments ─────────────────────────────────────────────────────────────
+
+
+export const comments = pgTable("comments", {
+  id:        uuid("id").defaultRandom().primaryKey(),
+  postId:    uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  userId:    text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  content:   text("content").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => ({
+  // Remove the unique index on postId
+  createdIdx: index("comments_created_idx").on(t.createdAt.desc()),
+}));
+
 
 // ── subscriptions ─────────────────────────────────────────────────────────────
 export const subscriptions = pgTable("subscriptions", {
@@ -281,19 +321,93 @@ export const creatorWallets = pgTable("creator_wallets", {
 }));
 
 // ── messages ──────────────────────────────────────────────────────────────────
+/**
+ * Messages Table
+ * Stores all direct messages between users and creators
+ */
 export const messages = pgTable("messages", {
   id:         uuid("id").defaultRandom().primaryKey(),
-  fromUserId: text("from_user_id").notNull().references(() => user.id),
-  toUserId:   text("to_user_id").notNull().references(() => user.id),
+  
+  // Participants
+  fromUserId: text("from_user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  toUserId:   text("to_user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  
+  // Content
   content:    text("content").notNull(),
-  mediaUrl:   text("media_url"),
+  
+  // Status
   isRead:     boolean("is_read").notNull().default(false),
-  ppvPrice:   decimal("ppv_price", { precision: 10, scale: 2 }),
+  readAt:     timestamp("read_at"),
+  
+  // Timestamps
   createdAt:  timestamp("created_at").notNull().defaultNow(),
+  updatedAt:  timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
-  fromUserIdx:  index("messages_from_idx").on(t.fromUserId),
-  toUserIdx:    index("messages_to_idx").on(t.toUserId),
-  createdAtIdx: index("messages_created_at_idx").on(t.createdAt),
+  // Indexes for fast queries
+  fromUserIdx:    index("msg_from_user_idx").on(t.fromUserId),
+  toUserIdx:      index("msg_to_user_idx").on(t.toUserId),
+  createdIdx:     index("msg_created_idx").on(t.createdAt),
+  conversationIdx: index("msg_conversation_idx").on(t.fromUserId, t.toUserId),
+}));
+
+/**
+ * Conversations Table
+ * Tracks conversation metadata (last message, unread count, etc.)
+ */
+export const conversations = pgTable("conversations", {
+  id:                 uuid("id").defaultRandom().primaryKey(),
+  
+  // Participants (ordered alphabetically for consistency)
+  participant1Id:     text("participant1_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  participant2Id:     text("participant2_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  
+  // Last message info
+  lastMessageId:      uuid("last_message_id"),
+  lastMessageContent: text("last_message_content"),
+  lastMessageAt:      timestamp("last_message_at"),
+  
+  // Unread counts (per participant)
+  unreadCountUser1:   integer("unread_count_user1").notNull().default(0),
+  unreadCountUser2:   integer("unread_count_user2").notNull().default(0),
+  
+  // Timestamps
+  createdAt:          timestamp("created_at").notNull().defaultNow(),
+  updatedAt:          timestamp("updated_at").notNull().defaultNow(),
+}, t => ({
+  // Unique constraint on participant pair
+  participantsIdx: index("conv_participants_idx").on(t.participant1Id, t.participant2Id),
+}));
+
+// Type inference
+export type Message = typeof messages.$inferSelect;
+export type NewMessage = typeof messages.$inferInsert;
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+
+// Track all media uploads for analytics/cleanup
+export const mediaUploads = pgTable("media_uploads", {
+  id:           uuid("id").defaultRandom().primaryKey(),
+  userId:       text("user_id").notNull().references(() => user.id),
+  blobName:     text("blob_name").notNull(),
+  container:    text("container").notNull(),
+  url:          text("url").notNull(),
+  contentType:  text("content_type").notNull(),
+  size:         integer("size").notNull(), // bytes
+  width:        integer("width"),
+  height:       integer("height"),
+  isDeleted:    boolean("is_deleted").notNull().default(false),
+  createdAt:    timestamp("created_at").notNull().defaultNow(),
+}, t => ({
+  userIdx:      index("media_user_idx").on(t.userId),
+  containerIdx: index("media_container_idx").on(t.container),
 }));
 
 // ── Relations ─────────────────────────────────────────────────────────────────

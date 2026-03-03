@@ -18,70 +18,38 @@ import type {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** Get user dashboard stats */
-export async function getUserStats(userId: string): Promise<StatItem[]> {
-  const [
-    [{ subCount }],
-    [{ totalSpent }],
-    [{ unlockedCount }],
-    [{ tipsSent }],
-  ] = await Promise.all([
-    // Active subscriptions
-    db.select({ subCount: sql<number>`COUNT(*)`.as("sub_count") })
-      .from(subscriptions)
-      .where(and(
-        eq(subscriptions.userId, userId),
-        eq(subscriptions.status, "active")
-      )),
+/**
+ * Get user stats
+ */
+export async function getUserStats(userId: string) {
+  // Count active subscriptions
+  const subsCountResult = await db.execute<{ count: number }>(sql`
+    SELECT COUNT(*)::int as count
+    FROM ${subscriptions}
+    WHERE user_id = ${userId}
+      AND status = 'active'
+  `);
 
-    // Total amount spent
-    db.select({ totalSpent: sql<string>`COALESCE(SUM(amount), 0)`.as("total_spent") })
-      .from(transactions)
-      .where(eq(transactions.userId, userId)),
+  const activeSubsCount = subsCountResult.rows[0]?.count || 0;
 
-    // PPV content unlocked
-    db.select({ unlockedCount: sql<number>`COUNT(*)`.as("unlocked_count") })
-      .from(ppvUnlocks)
-      .where(and(
-        eq(ppvUnlocks.userId, userId),
-        eq(ppvUnlocks.paymentStatus, "completed")
-      )),
+  // Calculate total spent (sum of prices)
+  const totalSpentResult = await db.execute<{ total: string }>(sql`
+    SELECT COALESCE(SUM(price_at_subscription::decimal), 0)::text as total
+    FROM ${subscriptions}
+    WHERE user_id = ${userId}
+      AND payment_status = 'completed'
+  `);
 
-    // Tips sent
-    db.select({ tipsSent: sql<string>`COALESCE(SUM(amount), 0)`.as("tips_sent") })
-      .from(tips)
-      .where(and(
-        eq(tips.fromUserId, userId),
-        eq(tips.paymentStatus, "completed")
-      )),
-  ]);
+  const totalSpent = parseFloat(totalSpentResult.rows[0]?.total || "0");
 
   return [
-    {
-      label: "Active Subs",
-      value: (subCount ?? 0).toString(),
-      change: "+1",
-      up: true,
-    },
-    {
-      label: "Amount Spent",
-      value: `$${Number(totalSpent ?? 0).toFixed(2)}`,
-      change: "+$45",
-      up: false, // spending is red
-    },
-    {
-      label: "Content Unlocked",
-      value: (unlockedCount ?? 0).toString(),
-      change: "+4",
-      up: true,
-    },
-    {
-      label: "Tips Sent",
-      value: `$${Number(tipsSent ?? 0).toFixed(2)}`,
-      change: "+$25",
-      up: false,
-    },
+    { label: "Active Subscriptions", value: String(activeSubsCount) },
+    { label: "Total Spent", value: `$${totalSpent.toFixed(2)}` },
+    { label: "Content Unlocked", value: "0" }, // Placeholder
+    { label: "Tips Sent", value: "0" }, // Placeholder
   ];
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONTENT FEED
@@ -225,38 +193,87 @@ export async function hasPostAccess(userId: string, postId: string): Promise<boo
 export async function getUserSubscriptions(
   userId: string
 ): Promise<SubscriptionWithCreator[]> {
-  const rows = await db
-    .select({
-      subscription: subscriptions,
-      creator: creators,
-      creatorUser: user,
-      creatorProfile: profiles,
-      unreadMessages: sql<number>`
-        (SELECT COUNT(*) FROM ${messages}
-         WHERE ${messages.toUserId} = ${userId}
-           AND ${messages.fromUserId} = ${user.id}
-           AND ${messages.isRead} = false)
-      `.as("unread_messages"),
-    })
-    .from(subscriptions)
-    .innerJoin(creators, eq(subscriptions.creatorId, creators.id))
-    .innerJoin(user, eq(creators.userId, user.id))
-    .leftJoin(profiles, eq(user.id, profiles.id))
-    .where(eq(subscriptions.userId, userId))
-    .orderBy(desc(subscriptions.currentPeriodEnd));
+  // Use raw SQL for better control and type safety
+  const results = await db.execute<{
+  subscription_id: string;
+  tier: "standard" | "vip";
+  status: string;
+  price_at_subscription: string;
+  current_period_end: Date;
+  created_at: Date;
+  creator_user_id: string;
+  creator_name: string;
+  creator_username: string | null;
+  creator_avatar_url: string | null;
+}>(sql`
+  SELECT
+    s.id as subscription_id,
+    s.tier,
+    s.status,
+    s.price_at_subscription,
+    s.current_period_end,
+    s.created_at,
+    u.id as creator_user_id,
+    u.name as creator_name,
+    p.username as creator_username,
+    p.avatar_url as creator_avatar_url
+  FROM ${subscriptions} s
+  JOIN ${creators} c ON s.creator_id = c.id
+  JOIN ${user} u ON c.user_id = u.id
+  LEFT JOIN ${profiles} p ON p.id = u.id
+  WHERE s.user_id = ${userId}
+  ORDER BY s.created_at DESC
+`);
 
-  return rows.map(r => ({
-    ...r.subscription,
-    unreadMessages: r.unreadMessages ?? 0,
-    creator: {
-      id: r.creator.id,
-      user: {
-        displayName: r.creatorUser.name,
-        username: r.creatorProfile?.username ?? r.creatorUser.email.split("@")[0],
-        avatarUrl: r.creatorProfile?.avatarUrl ?? r.creatorUser.image ?? null,
-      },
-    },
-  })) as SubscriptionWithCreator[];
+  // Get unread message counts (optional - remove if conversations table doesn't exist)
+  let unreadMap = new Map<string, number>();
+  
+  try {
+    const unreadCounts = await db.execute<{
+      creator_user_id: string;
+      unread_count: number;
+    }>(sql`
+      SELECT 
+        c.user_id as creator_user_id,
+        COALESCE(
+          CASE 
+            WHEN conv.participant1_id = ${userId} THEN conv.unread_count_user1
+            ELSE conv.unread_count_user2
+          END, 0
+        )::int as unread_count
+      FROM ${subscriptions} s
+      JOIN ${creators} c ON s.creator_id = c.id
+      LEFT JOIN conversations conv ON (
+        (conv.participant1_id = ${userId} AND conv.participant2_id = c.user_id)
+        OR
+        (conv.participant1_id = c.user_id AND conv.participant2_id = ${userId})
+      )
+      WHERE s.user_id = ${userId}
+        AND s.status = 'active'
+    `);
+
+    unreadMap = new Map(
+      unreadCounts.rows.map(row => [row.creator_user_id, row.unread_count])
+    );
+  } catch (error) {
+    console.log('[getUserSubscriptions] No unread counts available (conversations table may not exist)');
+  }
+
+  // Map results to SubscriptionWithCreator type
+  return results.rows.map(row => ({
+    subscriptionId: row.subscription_id,
+    tier: row.tier,
+    status: row.status,
+    price: parseFloat(row.price_at_subscription),
+    nextBillingDate: row.current_period_end,
+    subscribedAt: row.created_at,
+    creatorUserId: row.creator_user_id,
+    creatorName: row.creator_name,
+    creatorUsername: row.creator_username || row.creator_name.toLowerCase().replace(/\s+/g, ''),
+    creatorAvatarUrl: row.creator_avatar_url,
+    creatorCoverUrl: row.creator_cover_url,
+    unreadMessageCount: unreadMap.get(row.creator_user_id) || 0,
+  }));
 }
 
 /** Check if user is subscribed to a creator */
@@ -321,73 +338,91 @@ export async function getUserWalletBalance(userId: string): Promise<number> {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** Get featured creators for discovery page */
+/**
+ * Get discover creators with subscription status
+ */
 export async function getDiscoverCreators(
-  page = 1,
-  pageSize = 24,
-  filters?: {
-    minPrice?: number;
-    maxPrice?: number;
-    verified?: boolean;
-  }
-): Promise<{ creators: CreatorCardData[]; total: number }> {
-  const offset = (page - 1) * pageSize;
+  userId: string,
+  page: number = 1,
+  limit: number = 24
+) {
+  const offset = (page - 1) * limit;
 
-  const conditions: SQL[] = [eq(creators.status, "active")];
-  if (filters?.minPrice !== undefined) {
-  conditions.push(gte(creators.standardPrice, filters.minPrice));
-}
-if (filters?.maxPrice !== undefined) {
-  conditions.push(lte(creators.standardPrice, filters.maxPrice));
-}
+  // Get creators with subscription status
+  const results = await db.execute<{
+    creator_id: string;
+    user_id: string;
+    name: string;
+    username: string;
+    avatar_url: string | null;
+    cover_url: string | null;
+    bio: string | null;
+    is_verified: boolean;
+    subscriber_count: number;
+    post_count: number;
+    standard_price: string;
+    vip_price: string;
+    is_subscribed: boolean;
+  }>(sql`
+    SELECT 
+      c.id as creator_id,
+      c.user_id,
+      u.name,
+      COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
+      p.avatar_url,
+      p.cover_url,
+      p.bio,
+      c.is_verified,
+      c.subscriber_count,
+      c.post_count,
+      c.standard_price,
+      c.vip_price,
+      EXISTS(
+        SELECT 1 FROM ${subscriptions} s
+        WHERE s.user_id = ${userId}
+          AND s.creator_id = c.id
+          AND s.status = 'active'
+      ) as is_subscribed
+    FROM ${creators} c
+    JOIN ${user} u ON c.user_id = u.id
+    LEFT JOIN ${profiles} p ON u.id = p.id
+    WHERE u.role = 'creator'
+    ORDER BY c.subscriber_count DESC, c.created_at DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `);
 
-  const rows = await db
-    .select({
-      creator: creators,
-      user: user,
-      profile: profiles,
-      postCount: sql<number>`
-        (SELECT COUNT(*) FROM ${posts}
-         WHERE ${posts.creatorId} = ${creators.id}
-           AND ${posts.isPublished} = true)
-      `.as("post_count"),
-      recentPostPreview: sql<string>`
-        (SELECT ${posts.thumbnailUrl} FROM ${posts}
-         WHERE ${posts.creatorId} = ${creators.id}
-           AND ${posts.isPublished} = true
-         ORDER BY ${posts.createdAt} DESC
-         LIMIT 1)
-      `.as("recent_post_preview"),
-    })
-    .from(creators)
-    .innerJoin(user, eq(creators.userId, user.id))
-    .leftJoin(profiles, eq(user.id, profiles.id))
-    .where(and(...conditions))
-    .orderBy(desc(creators.subscriberCount))
-    .limit(pageSize)
-    .offset(offset);
+  // Get total count
+  const countResult = await db.execute<{ count: number }>(sql`
+    SELECT COUNT(*)::int as count
+    FROM ${creators} c
+    JOIN ${user} u ON c.user_id = u.id
+    WHERE u.role = 'creator'
+  `);
 
-  const [{ count: total }] = await db
-    .select({ count: sql<number>`COUNT(*)`.as("count") })
-    .from(creators)
-    .where(and(...conditions));
-
-  const mapped: CreatorCardData[] = rows.map(r => ({
-    id: r.creator.id,
-    name: r.user.name,
-    username: r.profile?.username ?? r.user.email.split("@")[0],
-    avatarUrl: r.profile?.avatarUrl ?? r.user.image ?? null,
-    coverImageUrl: r.creator.coverImageUrl,
-    bio: r.creator.bio,
-    isVerified: r.creator.isVerified,
-    subscriberCount: r.creator.subscriberCount,
-    postCount: r.postCount ?? 0,
-    standardPrice: Number(r.creator.standardPrice),
-    vipPrice: Number(r.creator.vipPrice),
-    previewImage: r.recentPostPreview,
+  const creatorsData = results.rows.map(row => ({
+    id: row.creator_id,
+    userId: row.user_id,
+    name: row.name,
+    username: row.username,
+    avatarUrl: row.avatar_url,
+    coverImageUrl: row.cover_url,
+    bio: row.bio,
+    isVerified: row.is_verified,
+    subscriberCount: row.subscriber_count,
+    postCount: row.post_count,
+    standardPrice: parseFloat(row.standard_price),
+    vipPrice: parseFloat(row.vip_price),
+    previewImage: null,
+    isSubscribed: row.is_subscribed,
   }));
 
-  return { creators: mapped, total: total ?? 0 };
+  return {
+    creators: creatorsData,
+    total: countResult.rows[0]?.count || 0,
+  };
 }
+
 
 /** Search creators by name/username */
 export async function searchCreators(
@@ -580,4 +615,24 @@ export async function getMessageThread(
   }));
 
   return { messages: mapped, total: total ?? 0 };
+}
+
+
+export async function isUserSubscribed(
+  userId: string,
+  creatorId: string
+): Promise<boolean> {
+  const [subscription] = await db
+    .select()
+    .from(subscriptions)
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.creatorId, creatorId),
+        eq(subscriptions.status, "active")
+      )
+    )
+    .limit(1);
+
+  return !!subscription;
 }

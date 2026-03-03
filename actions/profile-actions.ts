@@ -92,7 +92,7 @@ export async function getProfileByUsername(username: string) {
         creatorAccount: creators,
       })
       .from(profiles)
-      .leftJoin(creators, eq(profiles.id, creators.id))
+      .leftJoin(creators, eq(profiles.id, creators.userId))
       .where(eq(profiles.username, username))
       .limit(1);
     

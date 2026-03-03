@@ -22,9 +22,17 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { InferSelectModel } from "drizzle-orm";
+import type { creatorStatusEnum } from "@/db/schema";
+
+type CreatorStatus = typeof creatorStatusEnum.enumValues[number];
 
 type Profile = InferSelectModel<typeof profiles>;
-type CreatorAccount = InferSelectModel<typeof creators>;
+type CreatorAccountBase = InferSelectModel<typeof creators>;
+
+// Extend with the narrowed status type
+interface CreatorAccount extends CreatorAccountBase {
+  status: CreatorStatus;
+}
 
 interface CreatorStatusProps {
   profile: Profile;

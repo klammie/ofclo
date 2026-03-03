@@ -217,58 +217,78 @@ export async function getPostDetails(creatorId: string, postId: string) {
 /** Get creator's subscribers with spending details */
 export async function getCreatorSubscribers(
   creatorId: string,
-  page = 1,
-  pageSize = 20
+  page: number = 1,
+  limit: number = 20,
+  tierFilter?: "all" | "standard" | "vip"
 ): Promise<{ subscribers: SubscriberWithDetails[]; total: number }> {
-  const offset = (page - 1) * pageSize;
+  const offset = (page - 1) * limit;
 
-  const rows = await db
-    .select({
-      subscription: subscriptions,
-      user: user,
-      profile: profiles,
-      totalSpent: sql<string>`
-        COALESCE(
-          (SELECT SUM(amount) FROM ${transactions}
-           WHERE ${transactions.userId} = ${user.id}
-             AND ${transactions.type} IN ('subscription', 'ppv', 'tip')),
-          0
-        )
-      `.as("total_spent"),
-      tipCount: sql<number>`
-        (SELECT COUNT(*) FROM ${tips}
-         WHERE ${tips.fromUserId} = ${user.id}
-           AND ${tips.toCreatorId} = ${creatorId}
-           AND ${tips.paymentStatus} = 'completed')
-      `.as("tip_count"),
-    })
-    .from(subscriptions)
-    .innerJoin(user, eq(subscriptions.userId, user.id))
-    .leftJoin(profiles, eq(user.id, profiles.id))
-    .where(eq(subscriptions.creatorId, creatorId))
-    .orderBy(desc(subscriptions.createdAt))
-    .limit(pageSize)
-    .offset(offset);
+  const tierCondition = tierFilter && tierFilter !== "all" 
+    ? sql`AND s.tier = ${tierFilter}`
+    : sql``;
 
-  const [{ count: total }] = await db
-    .select({ count: count() })
-    .from(subscriptions)
-    .where(eq(subscriptions.creatorId, creatorId));
+  const results = await db.execute<{
+    subscription_id: string;
+    user_id: string;
+    user_name: string;
+    user_email: string;
+    username: string;
+    avatar_url: string | null;
+    tier: "standard" | "vip";
+    status: string;
+    subscribed_at: Date;
+    total_spent: string;  // ← This comes as string from DECIMAL
+    tip_count: number;
+  }>(sql`
+    SELECT 
+      s.id as subscription_id,
+      u.id as user_id,
+      u.name as user_name,
+      u.email as user_email,
+      COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
+      p.avatar_url,
+      s.tier,
+      s.status,
+      s.created_at as subscribed_at,
+      COALESCE(s.price_at_subscription::decimal, 0)::text as total_spent,
+      0 as tip_count
+    FROM ${subscriptions} s
+    JOIN ${user} u ON s.user_id = u.id
+    LEFT JOIN ${profiles} p ON u.id = p.id
+    WHERE s.creator_id = ${creatorId}
+      AND s.status = 'active'
+      ${tierCondition}
+    ORDER BY s.created_at DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `);
 
-  const mapped: SubscriberWithDetails[] = rows.map(r => ({
-    ...r.subscription,
-    user: {
-      id: r.user.id,
-      name: r.user.name,
-      email: r.user.email,
-      username: r.profile?.username ?? r.user.email.split("@")[0],
-      avatarUrl: r.profile?.avatarUrl ?? r.user.image ?? null,
-    },
-    totalSpent: Number(r.totalSpent ?? 0),
-    tipCount: r.tipCount ?? 0,
+  const countResult = await db.execute<{ count: number }>(sql`
+    SELECT COUNT(*)::int as count
+    FROM ${subscriptions} s
+    WHERE s.creator_id = ${creatorId}
+      AND s.status = 'active'
+      ${tierCondition}
+  `);
+
+  const subscribers: SubscriberWithDetails[] = results.rows.map(row => ({
+    subscriptionId: row.subscription_id,
+    userId: row.user_id,
+    name: row.user_name,
+    username: row.username,
+    email: row.user_email,
+    avatarUrl: row.avatar_url,
+    tier: row.tier,
+    status: row.status,
+    totalSpent: parseFloat(row.total_spent),  // ✅ Convert string to number
+    tipCount: row.tip_count,
+    subscribedAt: row.subscribed_at,
   }));
 
-  return { subscribers: mapped, total: total ?? 0 };
+  return {
+    subscribers,
+    total: countResult.rows[0]?.count || 0,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
