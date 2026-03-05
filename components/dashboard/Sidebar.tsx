@@ -109,7 +109,7 @@ const NAV_ITEMS: NavItem[] = [
   // ─── Creator Routes ──────────────────────────────────────────────────────
   {
     label: "Overview",
-    href: "/dashboard/creator",
+    href: "/dashboard/creator/overview",
     icon: "🏠",
     roles: ["creator"],
   },

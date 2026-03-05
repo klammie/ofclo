@@ -7,7 +7,7 @@
 
 import {
   pgTable, pgEnum, text, integer, boolean,
-  timestamp, decimal, uuid, index, uniqueIndex,
+  timestamp, decimal, date, uuid, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -83,26 +83,18 @@ export const cryptoPayStatusEnum  = pgEnum("crypto_pay_status", ["initiated","pe
 // Extended profile data that BetterAuth's `user` table doesn't store.
 // One-to-one with BetterAuth's user.id.
 export const profiles = pgTable("profiles", {
-  id:              text("id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
-  creatorId:       text("creator_id").notNull(),
-  userId:          text("user_id").notNull(),
-  name:            text("name").notNull(),
-  username:        text("username").notNull().unique(),
-  avatarUrl:       text("avatar_url"),
-  coverUrl:        text("cover_url"),
-  bio:             text("bio"),
-  isVerified:      boolean("is_verified").notNull().default(false),
-  subscriberCount: integer("subscriber_count").notNull().default(0),
-  postCount:       integer("post_count").notNull().default(0),
-  standardPrice:   text("standard_price").notNull(),
-  vipPrice:        text("vip_price").notNull(),
-  isSubscribed:    boolean("is_subscribed").notNull().default(false),
-  walletBalance:   decimal("wallet_balance", { precision: 12, scale: 2 }).notNull().default("0.00"),
-  createdAt:       timestamp("created_at").notNull().defaultNow(),
-  updatedAt:       timestamp("updated_at").notNull().defaultNow(),
+  id:          text("id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  username:    text("username").notNull().unique(),
+  avatarUrl:   text("avatar_url"),
+  coverUrl:    text("cover_url"),
+  bio:         text("bio"),
+  location:    text("location"),
+  website:     text("website"),
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
+  updatedAt:   timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
   usernameIdx: uniqueIndex("profiles_username_idx").on(t.username),
-}));``
+}));
 
 // ── agencies ──────────────────────────────────────────────────────────────────
 export const agencies = pgTable("agencies", {
@@ -320,39 +312,130 @@ export const creatorWallets = pgTable("creator_wallets", {
   uniqueDefault: uniqueIndex("wallets_unique_default_idx").on(t.creatorId, t.currency),
 }));
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CREATOR GOALS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const creatorGoals = pgTable("creator_goals", {
+  id:            uuid("id").defaultRandom().primaryKey(),
+  creatorId:     uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  title:         text("title").notNull(),
+  description:   text("description"),
+  goalType:      text("goal_type").notNull(), // 'subscribers', 'revenue', 'posts', 'custom'
+  targetValue:   integer("target_value").notNull(),
+  currentValue:  integer("current_value").notNull().default(0),
+  deadline:      date("deadline"),
+  isCompleted:   boolean("is_completed").notNull().default(false),
+  completedAt:   timestamp("completed_at"),
+  createdAt:     timestamp("created_at").notNull().defaultNow(),
+  updatedAt:     timestamp("updated_at").notNull().defaultNow(),
+}, t => ({
+  creatorIdx: index("creator_goals_creator_idx").on(t.creatorId),
+}));
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCHEDULED POSTS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const scheduledPosts = pgTable("scheduled_posts", {
+  id:              uuid("id").defaultRandom().primaryKey(),
+  creatorId:       uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  title:           text("title").notNull(),
+  description:     text("description"),
+  mediaType:       text("media_type").notNull(), // 'image' | 'video'
+  mediaUrl:        text("media_url"),
+  thumbnailUrl:    text("thumbnail_url"),
+  isLocked:        boolean("is_locked").notNull().default(false),
+  ppvPrice:        decimal("ppv_price", { precision: 10, scale: 2 }),
+  scheduledFor:    timestamp("scheduled_for").notNull(),
+  status:          text("status").notNull().default("draft"), // 'draft', 'scheduled', 'published', 'cancelled'
+  publishedPostId: uuid("published_post_id").references(() => posts.id),
+  createdAt:       timestamp("created_at").notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at").notNull().defaultNow(),
+}, t => ({
+  creatorIdx:   index("scheduled_posts_creator_idx").on(t.creatorId),
+  scheduledIdx: index("scheduled_posts_scheduled_idx").on(t.scheduledFor),
+  statusIdx:    index("scheduled_posts_status_idx").on(t.status),
+}));
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SUBSCRIPTION HISTORY TABLE (for retention tracking)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const subscriptionHistory = pgTable("subscription_history", {
+  id:             uuid("id").defaultRandom().primaryKey(),
+  subscriptionId: uuid("subscription_id").notNull().references(() => subscriptions.id, { onDelete: "cascade" }),
+  userId:         text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  creatorId:      uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  tier:           text("tier").notNull(), // 'standard' | 'vip'
+  action:         text("action").notNull(), // 'subscribed', 'cancelled', 'upgraded', 'downgraded', 'renewed'
+  price:          decimal("price", { precision: 10, scale: 2 }),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
+}, t => ({
+  creatorIdx: index("subscription_history_creator_idx").on(t.creatorId),
+  dateIdx:    index("subscription_history_date_idx").on(t.createdAt),
+  actionIdx:  index("subscription_history_action_idx").on(t.action),
+}));
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TYPE INFERENCE
+// ══════════════════════════════════════════════════════════════════════════════
+
+export type CreatorGoal = typeof creatorGoals.$inferSelect;
+export type NewCreatorGoal = typeof creatorGoals.$inferInsert;
+
+export type ScheduledPost = typeof scheduledPosts.$inferSelect;
+export type NewScheduledPost = typeof scheduledPosts.$inferInsert;
+
+export type SubscriptionHistory = typeof subscriptionHistory.$inferSelect;
+export type NewSubscriptionHistory = typeof subscriptionHistory.$inferInsert;
+
 // ── messages ──────────────────────────────────────────────────────────────────
 /**
  * Messages Table
  * Stores all direct messages between users and creators
  */
+// db/schema.ts - Update messages table
+
 export const messages = pgTable("messages", {
-  id:         uuid("id").defaultRandom().primaryKey(),
+  id:           uuid("id").defaultRandom().primaryKey(),
+  fromUserId:   text("from_user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  toUserId:     text("to_user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  content:      text("content"),
   
-  // Participants
-  fromUserId: text("from_user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  toUserId:   text("to_user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
+  // PPV Media fields
+  mediaType:    text("media_type"), // 'image' | 'video' | null
+  mediaUrl:     text("media_url"),
+  thumbnailUrl: text("thumbnail_url"),
+  isPpv:        boolean("is_ppv").notNull().default(false),
+  ppvPrice:     decimal("ppv_price", { precision: 10, scale: 2 }),
   
-  // Content
-  content:    text("content").notNull(),
-  
-  // Status
-  isRead:     boolean("is_read").notNull().default(false),
-  readAt:     timestamp("read_at"),
-  
-  // Timestamps
-  createdAt:  timestamp("created_at").notNull().defaultNow(),
-  updatedAt:  timestamp("updated_at").notNull().defaultNow(),
+  isRead:       boolean("is_read").notNull().default(false),
+  readAt:       timestamp("read_at"),
+  createdAt:    timestamp("created_at").notNull().defaultNow(),
+  updatedAt:    timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
-  // Indexes for fast queries
-  fromUserIdx:    index("msg_from_user_idx").on(t.fromUserId),
-  toUserIdx:      index("msg_to_user_idx").on(t.toUserId),
-  createdIdx:     index("msg_created_idx").on(t.createdAt),
-  conversationIdx: index("msg_conversation_idx").on(t.fromUserId, t.toUserId),
+  fromUserIdx: index("messages_from_user_idx").on(t.fromUserId),
+  toUserIdx:   index("messages_to_user_idx").on(t.toUserId),
+  createdIdx:  index("messages_created_idx").on(t.createdAt),
 }));
+
+// New table for PPV purchases
+export const ppvPurchases = pgTable("ppv_purchases", {
+  id:          uuid("id").defaultRandom().primaryKey(),
+  messageId:   uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  userId:      text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  pricePaid:   decimal("price_paid", { precision: 10, scale: 2 }).notNull(),
+  purchasedAt: timestamp("purchased_at").notNull().defaultNow(),
+}, t => ({
+  messageIdx: index("ppv_purchases_message_idx").on(t.messageId),
+  userIdx:    index("ppv_purchases_user_idx").on(t.userId),
+}));
+
+export type PPVPurchase = typeof ppvPurchases.$inferSelect;
+export type NewPPVPurchase = typeof ppvPurchases.$inferInsert;
 
 /**
  * Conversations Table

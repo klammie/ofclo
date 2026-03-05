@@ -14,6 +14,16 @@ const nextConfig = {
       },
     ],
   },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '50mb', // Allow larger uploads for videos
+    },
+  },
+  api: {
+    bodyParser: {
+      sizeLimit: '50mb',
+    },
+  },
 };
 
 export default nextConfig;

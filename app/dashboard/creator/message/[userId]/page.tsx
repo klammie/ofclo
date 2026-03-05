@@ -62,6 +62,7 @@ const formattedMessages = messageHistory.map(m => ({
     avatarUrl: subscriber.profile?.avatarUrl || subscriber.user.image || null,
   };
 
+  const isCreator = true;
   return (
     <div className="h-screen bg-linear-to-br from-gray-900 via-black to-gray-900">
       <div className="max-w-7xl mx-auto h-full flex flex-col">
@@ -81,9 +82,11 @@ const formattedMessages = messageHistory.map(m => ({
         {/* Chat window */}
         <div className="flex-1 bg-gray-900/50 backdrop-blur-sm rounded-2xl border border-white/10 mx-4 mb-4 overflow-hidden">
           <ChatWindow
-    otherUser={subscriberData}
-    initialMessages={formattedMessages}
-  />
+  otherUser={subscriberData}
+  initialMessages={formattedMessages}
+  currentUserId={session.user.id}
+  isCreator={isCreator}  // ✅ Add this prop
+/>
         </div>
       </div>
     </div>

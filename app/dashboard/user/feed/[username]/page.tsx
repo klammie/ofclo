@@ -1,31 +1,22 @@
-// app/[username]/page.tsx
+// app/dashboard/user/feed/[username]/page.tsx
 import { notFound, redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { requireRole } from "@/lib/auth/guard";
 import { db } from "@/db";
-import { user, profiles, creators } from "@/db/schema";
-import { sql } from "drizzle-orm";
-import { CreatorProfilePublic } from "@/components/profile/CreatorProfilePublic";
+import { user, profiles, creators, subscriptions, posts, likes } from "@/db/schema";
+import { eq, sql, and } from "drizzle-orm";
+import { CreatorProfileDashboard } from "@/components/profile/CreatorProfileDashboard";
 
-interface ProfilePageProps {
+interface FeedProfilePageProps {
   params: Promise<{
     username: string;
   }>;
 }
 
-export default async function UserProfilePage({ params }: ProfilePageProps) {
+export default async function FeedProfilePage({ params }: FeedProfilePageProps) {
+  const session = await requireRole("user", "creator", "agency");
   const { username } = await params;
-  
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
 
-  // ✅ REDIRECT LOGGED-IN USERS TO DASHBOARD VERSION
-  if (session?.user) {
-    redirect(`/dashboard/user/feed/${username}`);
-  }
-
-  // Get profile for public view
+  // Get profile with creator info
   const profileData = await db.execute<{
     user_id: string;
     name: string;
@@ -70,6 +61,71 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
   }
 
   const profile = profileData.rows[0];
+  const isOwnProfile = session.user.id === profile.user_id;
+
+  // Check if subscribed
+  let isSubscribed = false;
+  let subscriptionTier: "standard" | "vip" | null = null;
+
+  if (profile.creator_id) {
+    const [sub] = await db
+      .select()
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.userId, session.user.id),
+          eq(subscriptions.creatorId, profile.creator_id),
+          eq(subscriptions.status, "active")
+        )
+      )
+      .limit(1);
+
+    if (sub) {
+      isSubscribed = true;
+      subscriptionTier = sub.tier;
+    }
+  }
+
+  // Get posts
+  const postsData = await db.execute<{
+    id: string;
+    title: string | null;
+    description: string | null;
+    content_type: string;
+    media_url: string;
+    thumbnail_url: string | null;
+    is_locked: boolean;
+    ppv_price: string | null;
+    like_count: number;
+    comment_count: number;
+    created_at: Date;
+    is_liked: boolean;
+  }>(sql`
+    SELECT 
+      p.id,
+      p.title,
+      p.description,
+      p.content_type,
+      p.media_url,
+      p.thumbnail_url,
+      p.is_locked,
+      p.ppv_price,
+      p.like_count,
+      p.comment_count,
+      p.created_at,
+      EXISTS(
+        SELECT 1 FROM ${likes} l 
+        WHERE l.post_id = p.id AND l.user_id = ${session.user.id}
+      ) as is_liked
+    FROM ${posts} p
+    WHERE p.creator_id = ${profile.creator_id}
+      AND (
+        p.is_locked = false 
+        OR ${isSubscribed}
+      )
+    ORDER BY p.created_at DESC
+    LIMIT 20
+  `);
 
   const profileFormatted = {
     userId: profile.user_id,
@@ -90,39 +146,6 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
     vipPrice: profile.vip_price ? parseFloat(profile.vip_price) : null,
   };
 
-  // Public users see limited posts (only public ones)
-  const postsData = await db.execute<{
-    id: string;
-    title: string | null;
-    description: string | null;
-    content_type: string;
-    media_url: string;
-    thumbnail_url: string | null;
-    is_locked: boolean;
-    ppv_price: string | null;
-    like_count: number;
-    comment_count: number;
-    created_at: Date;
-  }>(sql`
-    SELECT 
-      p.id,
-      p.title,
-      p.description,
-      p.content_type,
-      p.media_url,
-      p.thumbnail_url,
-      p.is_locked,
-      p.ppv_price,
-      p.like_count,
-      p.comment_count,
-      p.created_at
-    FROM posts p
-    WHERE p.creator_id = ${profile.creator_id}
-      AND p.is_locked = false
-    ORDER BY p.created_at DESC
-    LIMIT 10
-  `);
-
   const formattedPosts = postsData.rows.map(post => ({
     id: post.id,
     title: post.title,
@@ -135,44 +158,17 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
     likeCount: post.like_count,
     commentCount: post.comment_count,
     createdAt: post.created_at,
-    isLiked: false,
+    isLiked: post.is_liked,
   }));
 
   return (
-    <CreatorProfilePublic
+    <CreatorProfileDashboard
       profile={profileFormatted}
       posts={formattedPosts}
-      isOwnProfile={false}
-      isSubscribed={false}
-      subscriptionTier={null}
-      currentUserId={null}
+      isOwnProfile={isOwnProfile}
+      isSubscribed={isSubscribed}
+      subscriptionTier={subscriptionTier}
+      currentUserId={session.user.id}
     />
   );
-}
-
-export async function generateMetadata({ params }: ProfilePageProps) {
-  const { username } = await params;
-  
-  const profileData = await db.execute<{
-    name: string;
-    bio: string | null;
-  }>(sql`
-    SELECT 
-      u.name,
-      p.bio
-    FROM ${profiles} p
-    JOIN ${user} u ON p.id = u.id
-    WHERE p.username = ${username}
-  `);
-
-  if (profileData.rows.length === 0) {
-    return { title: "Profile Not Found" };
-  }
-
-  const profile = profileData.rows[0];
-
-  return {
-    title: `${profile.name} (@${username}) - FanVault`,
-    description: profile.bio || `Check out ${profile.name}'s profile on FanVault`,
-  };
 }

@@ -1,26 +1,11 @@
 // components/messages/ChatWindow.tsx
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSocket } from "@/lib/hooks/useSocket";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
-import { useSession } from "@/lib/auth/client";
-import Image from "next/image";
-
-type Message = {
-  id: string;
-  fromUserId: string;
-  toUserId: string;
-  content: string;
-  createdAt: string;
-  isRead: boolean;
-  sender?: {
-    name: string;
-    username: string;
-    avatarUrl: string | null;
-  };
-};
+import { PPVMessageInput } from "./PPVMessageInput";
 
 interface ChatWindowProps {
   otherUser: {
@@ -29,200 +14,186 @@ interface ChatWindowProps {
     username: string;
     avatarUrl: string | null;
   };
-  initialMessages: Message[];
+  initialMessages: any[];
+  currentUserId: string;
+  isCreator?: boolean;
 }
 
-export function ChatWindow({ otherUser, initialMessages }: ChatWindowProps) {
-  const { data: session } = useSession();
-  const { socket, isConnected, sendMessage, markAsRead, startTyping, stopTyping } = useSocket();
-  
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
-  const [isTyping, setIsTyping] = useState(false);
+export function ChatWindow({ 
+  otherUser, 
+  initialMessages, 
+  currentUserId,
+  isCreator = false 
+}: ChatWindowProps) {
+  const [messages, setMessages] = useState(initialMessages || []);
+  const [showPPVInput, setShowPPVInput] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout>();
+
+  const { sendMessage, isConnected, socket } = useSocket();
 
   // Auto-scroll to bottom
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
   useEffect(() => {
-    scrollToBottom();
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Mark messages as read on mount
-  useEffect(() => {
-    if (session?.user?.id) {
-      markAsRead(otherUser.id);
-    }
-  }, [session?.user?.id, otherUser.id, markAsRead]);
-
-  // Socket event listeners
+  // Listen for new messages
   useEffect(() => {
     if (!socket) return;
 
-    // Receive new message
-    const handleReceiveMessage = (message: Message) => {
-      console.log("[ChatWindow] Received message:", message);
-      
-      // Only add if it's from the current conversation
-      if (message.fromUserId === otherUser.id || message.toUserId === otherUser.id) {
-        setMessages((prev) => [...prev, message]);
-        
-        // Mark as read if from other user
-        if (message.fromUserId === otherUser.id) {
-          markAsRead(otherUser.id);
-        }
-      }
-    };
+    socket.on("receive_message", (message) => {
+      setMessages(prev => [...prev, message]);
+    });
 
-    // Confirmation message was sent
-    const handleMessageSent = (message: Message) => {
-      console.log("[ChatWindow] Message sent:", message);
-      setMessages((prev) => [...prev, message]);
-    };
-
-    // Typing indicator
-    const handleUserTyping = ({ userId }: { userId: string }) => {
-      if (userId === otherUser.id) {
-        setIsTyping(true);
-        
-        // Clear existing timeout
-        if (typingTimeoutRef.current) {
-          clearTimeout(typingTimeoutRef.current);
-        }
-        
-        // Stop showing typing after 3 seconds
-        typingTimeoutRef.current = setTimeout(() => {
-          setIsTyping(false);
-        }, 3000);
-      }
-    };
-
-    const handleUserStoppedTyping = ({ userId }: { userId: string }) => {
-      if (userId === otherUser.id) {
-        setIsTyping(false);
-      }
-    };
-
-    // Register listeners
-    socket.on("receive_message", handleReceiveMessage);
-    socket.on("message_sent", handleMessageSent);
-    socket.on("user_typing", handleUserTyping);
-    socket.on("user_stopped_typing", handleUserStoppedTyping);
-
-    // Cleanup
     return () => {
-      socket.off("receive_message", handleReceiveMessage);
-      socket.off("message_sent", handleMessageSent);
-      socket.off("user_typing", handleUserTyping);
-      socket.off("user_stopped_typing", handleUserStoppedTyping);
+      socket.off("receive_message");
     };
-  }, [socket, otherUser.id, markAsRead]);
+  }, [socket]);
 
-  // Handle send message
-  const handleSendMessage = (content: string) => {
-    if (!session?.user?.id || !content.trim()) return;
+  function handleSendMessage(content: string) {
+    if (!content.trim()) return;
     
-    console.log("[ChatWindow] Sending message:", content);
     sendMessage(otherUser.id, content);
-  };
+    
+    // Optimistic update
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      fromUserId: currentUserId,
+      toUserId: otherUser.id,
+      content,
+      createdAt: new Date().toISOString(),
+      isRead: false,
+      isPpv: false,
+      mediaType: null,
+      mediaUrl: null,
+      thumbnailUrl: null,
+      ppvPrice: null,
+      isUnlocked: false,
+      isOwn: true,
+    }]);
+  }
 
-  // Handle typing events
-  const handleTypingStart = () => {
-    startTyping(otherUser.id);
-  };
+  async function handleSendPPV(ppvData: {
+    content: string;
+    mediaType: string;
+    mediaUrl: string;
+    thumbnailUrl: string;
+    isPpv: boolean;
+    ppvPrice: number;
+  }) {
+    try {
+      const response = await fetch("/api/messages/send-ppv", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toUserId: otherUser.id,
+          ...ppvData,
+        }),
+      });
 
-  const handleTypingStop = () => {
-    stopTyping(otherUser.id);
-  };
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to send PPV");
+      }
+
+      const { message } = await response.json();
+      
+      // Add message to chat
+      setMessages(prev => [...prev, {
+        ...message,
+        isOwn: true,
+        isUnlocked: true, // Creator always sees their own content
+      }]);
+      
+      setShowPPVInput(false);
+      
+      console.log("[ChatWindow] PPV message sent successfully");
+    } catch (error) {
+      console.error("Send PPV error:", error);
+      alert(error instanceof Error ? error.message : "Failed to send PPV content");
+    }
+  }
 
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 p-4 border-b border-white/10 bg-gray-900/50">
-        {/* Avatar */}
-        <div className="relative w-10 h-10 rounded-full overflow-hidden bg-linear-to-br from-indigo-500 to-purple-600 shrink-0">
-          {otherUser.avatarUrl ? (
-            <Image
-              src={otherUser.avatarUrl}
-              alt={otherUser.name}
-              fill
-              className="object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-white font-bold">
-              {otherUser.name.charAt(0)}
-            </div>
-          )}
-        </div>
-
-        {/* User info */}
-        <div className="flex-1 min-w-0">
-          <div className="text-white font-semibold truncate">
-            {otherUser.name}
+      <div className="flex items-center justify-between p-4 border-b border-white/10 bg-gray-900/50">
+        <div className="flex items-center gap-3">
+          {/* Avatar */}
+          <div className="w-10 h-10 rounded-full overflow-hidden bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0">
+            {otherUser.avatarUrl ? (
+              <img 
+                src={otherUser.avatarUrl} 
+                alt={otherUser.name} 
+                className="w-full h-full object-cover" 
+              />
+            ) : (
+              <div className="text-white font-bold text-lg">
+                {otherUser.name?.charAt(0)?.toUpperCase() || '?'}
+              </div>
+            )}
           </div>
-          <div className="text-gray-400 text-sm truncate">
-            @{otherUser.username}
+
+          {/* User Info */}
+          <div>
+            <div className="text-white font-semibold">{otherUser.name}</div>
+            <div className="text-gray-400 text-xs">@{otherUser.username}</div>
           </div>
         </div>
 
-        {/* Connection status */}
+        {/* Connection Status */}
         <div className="flex items-center gap-2">
-          <div
-            className={`w-2 h-2 rounded-full ${
-              isConnected ? "bg-green-500" : "bg-gray-500"
-            }`}
-          />
+          <div className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
           <span className="text-xs text-gray-400">
-            {isConnected ? "Connected" : "Connecting..."}
+            {isConnected ? "Connected" : "Disconnected"}
           </span>
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-900/30">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400">
-            <div className="text-5xl mb-4">💬</div>
-            <div className="text-lg font-semibold mb-1">No messages yet</div>
-            <div className="text-sm">Send a message to start the conversation</div>
+          <div className="text-center text-gray-400 py-12">
+            <div className="text-4xl mb-2">💬</div>
+            <p>No messages yet. Start the conversation!</p>
           </div>
         ) : (
-          <>
-            {messages.map((message) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                isOwn={message.fromUserId === session?.user?.id}
-                sender={message.sender || otherUser}
-              />
-            ))}
-            
-            {/* Typing indicator */}
-            {isTyping && (
-              <div className="flex items-center gap-2 text-gray-400 text-sm">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
-                </div>
-                <span>{otherUser.name} is typing...</span>
-              </div>
-            )}
-            
-            <div ref={messagesEndRef} />
-          </>
+          messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              otherUser={otherUser}
+              currentUserId={currentUserId}
+            />
+          ))
         )}
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <MessageInput
-        onSendMessage={handleSendMessage}
-        onTypingStart={handleTypingStart}
-        onTypingStop={handleTypingStop}
-        disabled={!isConnected}
-      />
+      {/* Input Area */}
+      <div className="border-t border-white/10 bg-gray-900/50">
+        {showPPVInput ? (
+          <PPVMessageInput
+            onSend={handleSendPPV}
+            onCancel={() => setShowPPVInput(false)}
+          />
+        ) : (
+          <div className="p-4 space-y-2">
+            {/* Regular message input */}
+            <MessageInput onSendMessage={handleSendMessage} />
+            
+            {/* PPV Button - Only show for creators */}
+            {isCreator && (
+              <button
+                onClick={() => setShowPPVInput(true)}
+                className="w-full py-2 rounded-lg bg-gradient-to-r from-yellow-500 to-orange-600 text-white font-semibold text-sm hover:from-yellow-600 hover:to-orange-700 transition-all flex items-center justify-center gap-2"
+              >
+                <span>💰</span>
+                <span>Send PPV Content</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
