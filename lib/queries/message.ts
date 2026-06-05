@@ -6,7 +6,7 @@ import { messages, conversations, user, profiles } from "@/db/schema";
 import { eq, and, or, desc, sql } from "drizzle-orm";
 import { ppvPurchases } from "@/db/schema";
 
-export type ConversationWithUser = {
+interface ConversationWithUser {
   conversationId: string;
   otherUser: {
     id: string;
@@ -14,13 +14,13 @@ export type ConversationWithUser = {
     username: string;
     avatarUrl: string | null;
   };
-  lastMessage: {
-    content: string;
-    timestamp: Date;
-  };
+  lastMessageContent: string | null;
+  lastMessageAt: Date | null;
+  lastMessageSenderId: string | null;
   unreadCount: number;
   updatedAt: Date;
-};
+}
+
 
 export type MessageWithSender = {
   id: string;
@@ -48,8 +48,9 @@ export async function getUserConversations(
     other_user_name: string;
     other_user_username: string | null;
     other_user_avatar: string | null;
-    last_message_content: string;
-    last_message_at: Date;
+    last_message_content: string | null;
+    last_message_at: Date | null;
+    last_message_sender_id: string | null;   // 👈 add this to your SELECT
     unread_count: number;
     updated_at: Date;
   }>(sql`
@@ -64,6 +65,7 @@ export async function getUserConversations(
       p.avatar_url as other_user_avatar,
       c.last_message_content,
       c.last_message_at,
+      c.last_message_sender_id,   -- 👈 make sure this column exists in your schema
       CASE 
         WHEN c.participant1_id = ${userId} THEN c.unread_count_user1
         ELSE c.unread_count_user2
@@ -89,14 +91,14 @@ export async function getUserConversations(
       username: row.other_user_username || row.other_user_name.toLowerCase().replace(/\s+/g, ''),
       avatarUrl: row.other_user_avatar,
     },
-    lastMessage: {
-      content: row.last_message_content,
-      timestamp: row.last_message_at,
-    },
+    lastMessageContent: row.last_message_content,     // 👈 flatten
+    lastMessageAt: row.last_message_at,               // 👈 flatten
+    lastMessageSenderId: row.last_message_sender_id,  // 👈 flatten
     unreadCount: row.unread_count,
     updatedAt: row.updated_at,
   }));
 }
+
 
 /**
  * Get message history between two users

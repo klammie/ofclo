@@ -34,7 +34,9 @@ export type UploadResult = {
   height?:       number;
   size:          number;
   type:          "image" | "video";
+  duration?:     number | null;   // NEW: video length in seconds
 };
+
 
 export function MediaUploader({
   type,
@@ -233,9 +235,32 @@ async function uploadVideo(
   container: string,
   onProgress: (progress: number) => void
 ): Promise<UploadResult> {
-  // Step 1: Get SAS token
   onProgress(5);
 
+  // --- Step 1: Extract duration + thumbnail in browser ---
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.src = url;
+  video.muted = true;
+
+  await new Promise((res) => video.addEventListener("loadedmetadata", res));
+  const duration = video.duration;
+
+  video.currentTime = Math.min(1, duration / 2);
+  await new Promise((res) => video.addEventListener("seeked", res));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d")?.drawImage(video, 0, 0);
+
+  const thumbBlob: Blob = await new Promise((resolve) =>
+    canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.8)
+  );
+
+  URL.revokeObjectURL(url);
+
+  // --- Step 2: Get SAS token from your API ---
   const sasResponse = await fetch("/api/upload/sas-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -253,11 +278,9 @@ async function uploadVideo(
 
   const { sasUrl, blobUrl, blobName } = await sasResponse.json();
 
-  // Step 2: Upload directly to Azure using SAS URL
-  onProgress(10);
-
+  // --- Step 3: Upload video directly to Azure ---
+  onProgress(20);
   const arrayBuffer = await file.arrayBuffer();
-
   const uploadResponse = await fetch(sasUrl, {
     method: "PUT",
     headers: {
@@ -266,18 +289,30 @@ async function uploadVideo(
     },
     body: arrayBuffer,
   });
+  if (!uploadResponse.ok) throw new Error("Failed to upload video");
 
-  if (!uploadResponse.ok) {
-    throw new Error("Failed to upload to Azure Storage");
-  }
+  // --- Step 4: Upload thumbnail to thumbnails container ---
+  const thumbForm = new FormData();
+  thumbForm.append("file", thumbBlob, "thumb.jpg");
+  thumbForm.append("container", "thumbnails");
+
+  const thumbRes = await fetch("/api/upload/image", {
+    method: "POST",
+    body: thumbForm,
+  });
+  const thumbData = await thumbRes.json();
 
   onProgress(100);
 
   return {
     url: blobUrl,
+    thumbnailUrl: thumbData.url,
     blobName,
     container,
     size: file.size,
     type: "video" as const,
+    // include duration if you want to persist it
+    width: video.videoWidth,
+    height: video.videoHeight,
   };
 }

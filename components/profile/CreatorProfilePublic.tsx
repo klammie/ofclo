@@ -1,359 +1,586 @@
 "use client";
 
-import { useState } from "react";
-import Image from "next/image";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ProfilePost } from "./ProfilePost";
+import { LandingNav } from "@/components/landing/LandingNav";
 
-export function CreatorProfilePublic({
-  profile,
-  posts,
-  isOwnProfile,
-  isSubscribed,
-  subscriptionTier,
-  currentUserId,
-}) {
-  const router = useRouter();
-  const [activeTab, setActiveTab] = useState("posts");
-  const [isSubscribing, setIsSubscribing] = useState(false);
+// ─── Theme ────────────────────────────────────────────────────────────────────
+const V      = "#7c3aed";
+const P      = "#ef3976";
+const GRAD   = `linear-gradient(135deg, ${V}, ${P})`;
+const CARD   = "#1a1635";
+const SURF   = "#13112b";
+const BORDER = "rgba(124,58,237,0.18)";
+const TEXT   = "#f0eaff";
+const MUTED  = "rgba(240,234,255,0.45)";
 
-  async function handleSubscribe(tier: "standard" | "vip") {
-    if (!currentUserId) {
-      router.push("/login");
-      return;
-    }
+// ─── Types ────────────────────────────────────────────────────────────────────
+type Rarity = "common" | "rare" | "epic" | "legendary";
 
-    setIsSubscribing(true);
-    try {
-      const response = await fetch("/api/subscriptions/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          creatorId: profile.creatorId,
-          tier,
-        }),
-      });
+interface Post {
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  mediaType: string;
+  mediaUrl: string;
+  thumbnailUrl?: string | null;
+  isLocked: boolean;
+  ppvPrice?: number | null;
+  likeCount: number;
+  commentCount: number;
+  viewCount?: number;
+  createdAt: Date | string;
+  isLiked?: boolean;
+}
 
-      if (!response.ok) throw new Error("Failed to subscribe");
+interface Profile {
+  userId: string;
+  name: string;
+  username: string;
+  bio?: string | null;
+  avatarUrl?: string | null;
+  coverUrl?: string | null;
+  location?: string | null;
+  website?: string | null;
+  joinedAt: Date | string;
+  isVerified?: boolean;
+  subscriberCount: number;
+  postCount: number;
+  isCreator?: boolean;
+  creatorId?: string | null;
+  standardPrice?: number | null;
+  vipPrice?: number | null;
+}
 
-      router.refresh();
-      alert(`✅ Successfully subscribed!`);
-    } catch (error) {
-      console.error("Subscribe error:", error);
-      alert("Failed to subscribe");
-    } finally {
-      setIsSubscribing(false);
-    }
-  }
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function fmt(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
 
-  function handleMessage() {
-    if (!currentUserId) {
-      router.push("/login");
-      return;
-    }
-    router.push(`/dashboard/user/message/${profile.userId}`);
-  }
+function getRarity(n: number): Rarity {
+  if (n >= 10000) return "legendary";
+  if (n >= 1000)  return "epic";
+  if (n >= 100)   return "rare";
+  return "common";
+}
 
-  const joinedDate = new Date(profile.joinedAt).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+const RARITY: Record<Rarity, { label: string; color: string; icon: string; glow: string; badge: string; border: string }> = {
+  common:    { label: "Common",    color: "#94a3b8", icon: "◆", glow: "rgba(148,163,184,0)",   badge: "rgba(148,163,184,0.1)",  border: "rgba(148,163,184,0.3)" },
+  rare:      { label: "Rare",      color: "#38bdf8", icon: "◆", glow: "rgba(56,189,248,0.25)", badge: "rgba(56,189,248,0.12)",  border: "rgba(56,189,248,0.4)"  },
+  epic:      { label: "Epic",      color: "#a78bfa", icon: "◆", glow: "rgba(167,139,250,0.3)", badge: "rgba(167,139,250,0.12)", border: "rgba(167,139,250,0.45)" },
+  legendary: { label: "Legendary", color: "#fbbf24", icon: "♦", glow: "rgba(251,191,36,0.4)",  badge: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.5)"  },
+};
+
+const PLACEHOLDER_GRADS = [
+  "linear-gradient(135deg,#7c3aed,#ef3976)",
+  "linear-gradient(135deg,#0ea5e9,#7c3aed)",
+  "linear-gradient(135deg,#f59e0b,#ef3976)",
+  "linear-gradient(135deg,#4ade80,#06b6d4)",
+];
+function placeholderGrad(id: string) {
+  return PLACEHOLDER_GRADS[id.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % PLACEHOLDER_GRADS.length];
+}
+
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+function Avatar({ profile, size = 96 }: { profile: Profile; size?: number }) {
+  const rarity = getRarity(profile.subscriberCount);
+  const r      = RARITY[rarity];
+  return (
+    <div className="rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center font-black text-white"
+      style={{
+        width: size, height: size, fontSize: size * 0.36,
+        background:  profile.avatarUrl ? "transparent" : placeholderGrad(profile.userId),
+        border:      `3px solid ${r.color}`,
+        boxShadow:   `0 0 20px ${r.glow}, 0 0 0 4px rgba(13,13,26,1)`,
+      }}>
+      {profile.avatarUrl
+        ? <img src={profile.avatarUrl} alt={profile.name} className="size-full object-cover" />
+        : profile.name.charAt(0).toUpperCase()
+      }
+    </div>
+  );
+}
+
+// ─── Stat pill ────────────────────────────────────────────────────────────────
+function StatPill({ value, label }: { value: string | number; label: string }) {
+  return (
+    <div className="flex flex-col items-center gap-0.5 px-5 py-3 rounded-2xl"
+      style={{ background: "rgba(124,58,237,0.08)", border: `1px solid ${BORDER}` }}>
+      <span className="text-[20px] font-black" style={{ color: TEXT }}>{fmt(Number(value))}</span>
+      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: MUTED }}>{label}</span>
+    </div>
+  );
+}
+
+// ─── Media grid tile ──────────────────────────────────────────────────────────
+function MediaTile({ post, onClick }: { post: Post; onClick: () => void }) {
+  const thumb = post.thumbnailUrl ?? (post.mediaType === "image" ? post.mediaUrl : null);
+  const isVideo = post.mediaType === "video";
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-gray-900 via-black to-gray-900">
-      {/* Cover Image */}
-      <div className="relative h-72 w-full">
+    <button onClick={onClick}
+      className="relative aspect-square overflow-hidden rounded-xl group cursor-pointer"
+      style={{ background: "#0d0d1a" }}>
+
+      {/* Thumbnail / gradient placeholder */}
+      {thumb ? (
+        <img src={thumb} alt="" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+      ) : (
+        <div className="w-full h-full transition-transform duration-500 group-hover:scale-105"
+          style={{ background: placeholderGrad(post.id) }} />
+      )}
+
+      {/* Lock overlay */}
+      {post.isLocked && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2"
+          style={{ backdropFilter: "blur(14px)", background: "rgba(13,13,26,0.55)" }}>
+          <div className="size-10 rounded-2xl flex items-center justify-center"
+            style={{ background: "rgba(239,57,118,0.2)", border: "1px solid rgba(239,57,118,0.4)" }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef3976" strokeWidth="2.5" strokeLinecap="round">
+              <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+          </div>
+          <p className="text-[9px] font-black text-white uppercase tracking-wider">Locked</p>
+        </div>
+      )}
+
+      {/* Video badge */}
+      {isVideo && !post.isLocked && (
+        <div className="absolute top-2 right-2 size-7 rounded-full flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.6)" }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+      )}
+
+      {/* Hover stats */}
+      {!post.isLocked && (
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-end"
+          style={{ background: "linear-gradient(to top,rgba(0,0,0,0.8),transparent)" }}>
+          <div className="flex items-center gap-3 p-3">
+            <span className="text-white text-[11px] font-bold flex items-center gap-1">
+              <span style={{ fontSize: 12 }}>❤️</span>{fmt(post.likeCount)}
+            </span>
+            <span className="text-white text-[11px] font-bold flex items-center gap-1">
+              <span style={{ fontSize: 12 }}>💬</span>{fmt(post.commentCount)}
+            </span>
+          </div>
+        </div>
+      )}
+    </button>
+  );
+}
+
+// ─── Subscription card ────────────────────────────────────────────────────────
+function SubCard({ tier, price, features, onSubscribe, isSubscribing, isPopular }: {
+  tier: "standard" | "vip";
+  price: number;
+  features: string[];
+  onSubscribe: () => void;
+  isSubscribing: boolean;
+  isPopular?: boolean;
+}) {
+  const isVip = tier === "vip";
+
+  return (
+    <div className="relative rounded-[20px] border overflow-hidden flex flex-col"
+      style={{
+        background:  isVip ? "linear-gradient(145deg,#2d1b69,#1a1635)" : CARD,
+        borderColor: isVip ? "rgba(251,191,36,0.35)" : BORDER,
+        boxShadow:   isVip ? "0 0 40px rgba(251,191,36,0.12)" : "none",
+      }}>
+
+      {isPopular && (
+        <div className="absolute top-0 left-0 right-0 flex justify-center">
+          <span className="text-[9px] font-black uppercase tracking-widest px-4 py-1 text-white rounded-b-xl"
+            style={{ background: GRAD }}>
+            Most Popular
+          </span>
+        </div>
+      )}
+
+      <div className="p-5 pt-7 flex flex-col gap-4 flex-1">
+        {/* Tier label + icon */}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-widest mb-1"
+              style={{ color: isVip ? "#fbbf24" : MUTED }}>
+              {isVip ? "⭐ VIP Tier" : "Standard Tier"}
+            </p>
+            <p className="text-[26px] font-black" style={{ color: TEXT }}>
+              ${price.toFixed(2)}
+              <span className="text-[12px] font-bold ml-1" style={{ color: MUTED }}>/mo</span>
+            </p>
+          </div>
+          <div className="size-11 rounded-2xl flex items-center justify-center text-xl"
+            style={{ background: isVip ? "rgba(251,191,36,0.15)" : "rgba(124,58,237,0.1)", border: `1px solid ${isVip ? "rgba(251,191,36,0.3)" : BORDER}` }}>
+            {isVip ? "💎" : "⭐"}
+          </div>
+        </div>
+
+        {/* Features */}
+        <ul className="flex flex-col gap-2 flex-1">
+          {features.map((f) => (
+            <li key={f} className="flex items-start gap-2">
+              <span className="size-4 rounded-full flex items-center justify-center text-[9px] font-black flex-shrink-0 mt-0.5"
+                style={{ background: isVip ? "rgba(251,191,36,0.2)" : "rgba(124,58,237,0.15)", color: isVip ? "#fbbf24" : V }}>
+                ✓
+              </span>
+              <span className="text-[12px]" style={{ color: "rgba(240,234,255,0.7)" }}>{f}</span>
+            </li>
+          ))}
+        </ul>
+
+        {/* Button */}
+        <button onClick={onSubscribe} disabled={isSubscribing}
+          className="w-full py-3 rounded-xl text-[13px] font-black text-white transition-all"
+          style={{
+            background:  isVip ? "linear-gradient(135deg,#fbbf24,#f59e0b)" : GRAD,
+            color:       isVip ? "#0d0d1a" : "#fff",
+            boxShadow:   isVip ? "0 6px 20px rgba(251,191,36,0.35)" : "0 6px 20px rgba(124,58,237,0.35)",
+            opacity:     isSubscribing ? 0.7 : 1,
+          }}>
+          {isSubscribing ? "Processing…" : `Subscribe · $${price.toFixed(2)}/mo`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
+interface CreatorProfilePublicProps {
+  profile: Profile;
+  posts: Post[];
+  isOwnProfile: boolean;
+  isSubscribed: boolean;
+  subscriptionTier: "standard" | "vip" | null;
+  currentUserId: string | null;
+}
+
+type Tab = "posts" | "media";
+
+export function CreatorProfilePublic({
+  profile, posts, isOwnProfile, isSubscribed, subscriptionTier, currentUserId,
+}: CreatorProfilePublicProps) {
+  const router       = useRouter();
+  const [activeTab, setActiveTab]     = useState<Tab>("posts");
+  const [isSubscribing, setSubscribing] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+
+  const rarity = getRarity(profile.subscriberCount);
+  const r      = RARITY[rarity];
+
+  const joinedDate = new Date(profile.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const showSidebar = profile.isCreator && !isOwnProfile && !isSubscribed
+    && (profile.standardPrice || profile.vipPrice);
+
+  const handleSubscribe = useCallback(async (tier: "standard" | "vip") => {
+    if (!currentUserId) { router.push("/login"); return; }
+    setSubscribing(true);
+    try {
+      const res = await fetch("/api/subscriptions/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ creatorId: profile.creatorId, tier }),
+      });
+      if (!res.ok) throw new Error();
+      router.refresh();
+    } catch {
+      alert("Failed to subscribe. Please try again.");
+    } finally {
+      setSubscribing(false);
+    }
+  }, [currentUserId, profile.creatorId, router]);
+
+  const handleMessage = () => {
+    if (!currentUserId) { router.push("/login"); return; }
+    router.push(`/dashboard/user/message/${profile.userId}`);
+  };
+
+  return (
+    <div className="min-h-screen w-full" style={{ background: "#0d0d1a", fontFamily: "'Be Vietnam Pro', sans-serif", color: TEXT }}>
+
+      {/* ── Landing page nav sits above everything ── */}
+      <LandingNav anchored={false} />
+
+      {/* ── Cover — pt-16 so it starts below the fixed nav ── */}
+      <div className="relative h-52 sm:h-64 w-full overflow-hidden pt-16">
         {profile.coverUrl ? (
-          <Image
-            src={profile.coverUrl}
-            alt="Cover"
-            fill
-            className="object-cover"
-          />
+          <img src={profile.coverUrl} alt="Cover" className="w-full h-full object-cover" />
         ) : (
-          <div className="w-full h-full bg-linear-to-br from-pink-500/20 to-purple-500/20" />
+          <div className="w-full h-full" style={{ background: `linear-gradient(145deg, ${r.color}18, ${V}18, #0d0d1a)` }} />
         )}
-        <div className="absolute inset-0 bg-linear-to-t from-black via-transparent to-transparent" />
+        {/* gradient fade to page bg */}
+        <div className="absolute inset-0"
+          style={{ background: "linear-gradient(to bottom, transparent 40%, rgba(13,13,26,0.8) 80%, #0d0d1a 100%)" }} />
+        {/* rarity shimmer for legendary/epic */}
+        {(rarity === "legendary" || rarity === "epic") && (
+          <div className="absolute inset-0"
+            style={{ background: `linear-gradient(135deg, ${r.color}08, transparent 60%)` }} />
+        )}
       </div>
 
-      {/* Profile Header */}
-      <div className="max-w-7xl mx-auto px-8 -mt-20 relative z-10">
-        <div className="flex justify-between items-end mb-6">
-          {/* Avatar */}
-          <div className="relative">
-            <div className="w-40 h-40 rounded-full border-[6px] border-black overflow-hidden shadow-2xl">
-              {profile.avatarUrl ? (
-                <Image
-                  src={profile.avatarUrl}
-                  alt={profile.name}
-                  width={160}
-                  height={160}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-5xl font-bold">
-                  {profile.name.charAt(0)}
+      {/* ── Profile header ── */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 -mt-16 relative z-10">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
+
+          {/* Avatar + name */}
+          <div className="flex items-end gap-4">
+            <Avatar profile={profile} size={96} />
+            <div className="pb-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-[24px] sm:text-[28px] font-black" style={{ color: TEXT }}>
+                  {profile.name}
+                </h1>
+                {profile.isVerified && (
+                  <svg className="size-6 flex-shrink-0" viewBox="0 0 20 20" fill={r.color}>
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"/>
+                  </svg>
+                )}
+                {/* Rarity badge */}
+                <div className="flex items-center gap-1 rounded-full px-2 py-0.5"
+                  style={{ background: r.badge, border: `1px solid ${r.border}` }}>
+                  <span style={{ color: r.color, fontSize: 8 }}>{r.icon}</span>
+                  <span className="text-[9px] font-black uppercase tracking-wider" style={{ color: r.color }}>
+                    {r.label}
+                  </span>
                 </div>
-              )}
+              </div>
+              <p className="text-[13px] mt-0.5" style={{ color: MUTED }}>@{profile.username}</p>
             </div>
-            {/* Online indicator */}
-            <div className="absolute bottom-2 right-2 w-8 h-8 bg-green-500 border-4 border-black rounded-full" />
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex gap-3 mb-4">
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 flex-wrap">
             {isOwnProfile ? (
-              <button
-                onClick={() => router.push("/dashboard/creator/profile/edit")}
-                className="px-8 py-3 rounded-full bg-linear-to-r from-pink-500 to-purple-600 text-white font-bold hover:shadow-lg hover:shadow-pink-500/30 transition-all flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                Edit Profile
+              <button onClick={() => router.push("/dashboard/creator/profile/edit")}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-black border transition-all hover:opacity-80"
+                style={{ background: "rgba(124,58,237,0.1)", borderColor: BORDER, color: TEXT }}>
+                ✏️ Edit Profile
               </button>
             ) : isSubscribed ? (
               <>
-                <button
-                  onClick={handleMessage}
-                  className="px-8 py-3 rounded-full bg-linear-to-r from-pink-500 to-purple-600 text-white font-bold hover:shadow-lg hover:shadow-pink-500/30 transition-all flex items-center gap-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                  Message
+                <button onClick={handleMessage}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-black text-white transition-all hover:opacity-90"
+                  style={{ background: GRAD, boxShadow: "0 4px 16px rgba(124,58,237,0.35)" }}>
+                  💬 Message
                 </button>
-                <span className="px-6 py-3 rounded-full bg-green-500/20 text-green-400 font-bold border border-green-500/30">
-                  ✓ Subscribed ({subscriptionTier})
-                </span>
+                <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-black border"
+                  style={{ background: "rgba(34,197,94,0.08)", borderColor: "rgba(34,197,94,0.3)", color: "#4ade80" }}>
+                  ✓ {subscriptionTier === "vip" ? "VIP" : "Subscribed"}
+                </div>
               </>
+            ) : profile.isCreator && profile.standardPrice ? (
+              <button onClick={() => handleSubscribe("standard")} disabled={isSubscribing}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-black text-white transition-all hover:opacity-90"
+                style={{ background: GRAD, boxShadow: "0 4px 16px rgba(124,58,237,0.35)", opacity: isSubscribing ? 0.7 : 1 }}>
+                {isSubscribing ? "Processing…" : `Subscribe · $${profile.standardPrice.toFixed(2)}/mo`}
+              </button>
             ) : null}
 
-            <button className="p-3 rounded-full bg-gray-800/50 backdrop-blur border border-white/10 text-white hover:bg-white/10 transition-colors">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            {/* Share */}
+            <button
+              className="size-10 rounded-xl flex items-center justify-center transition-all hover:opacity-80"
+              style={{ background: "rgba(124,58,237,0.1)", border: `1px solid ${BORDER}`, color: MUTED }}
+              onClick={() => navigator.share?.({ title: profile.name, url: window.location.href })}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
               </svg>
             </button>
           </div>
         </div>
 
-        {/* Name & Bio */}
-        <div className="mt-6 pb-6 border-b border-white/10">
-          <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-4xl font-black text-white">{profile.name}</h2>
-            {profile.isVerified && (
-              <svg className="w-8 h-8 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        {/* Bio */}
+        {profile.bio && (
+          <p className="text-[13px] leading-relaxed mb-5 max-w-2xl" style={{ color: "rgba(240,234,255,0.7)" }}>
+            {profile.bio}
+          </p>
+        )}
+
+        {/* Meta row */}
+        <div className="flex flex-wrap items-center gap-4 mb-6 text-[12px]" style={{ color: MUTED }}>
+          {profile.location && (
+            <span className="flex items-center gap-1.5">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
               </svg>
-            )}
-          </div>
-          <p className="text-pink-400 font-bold text-lg mb-4">@{profile.username}</p>
-          {profile.bio && (
-            <p className="text-gray-400 max-w-2xl text-base leading-relaxed">{profile.bio}</p>
+              {profile.location}
+            </span>
           )}
-        </div>
-
-        {/* Stats & Info */}
-        <div className="mt-8 p-6 rounded-3xl bg-white/5 backdrop-blur-sm border border-white/10">
-          <h3 className="text-xs font-black text-pink-500 uppercase tracking-[0.2em] mb-4">
-            About the Creator
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            {profile.location && (
-              <div className="flex items-center gap-3 text-gray-400">
-                <svg className="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                <span className="text-sm font-medium">{profile.location}</span>
-              </div>
-            )}
-            {profile.website && (
-              <div className="flex items-center gap-3 text-gray-400">
-                <svg className="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                <a href={profile.website} target="_blank" rel="noopener" className="text-sm font-medium text-pink-400 hover:underline">
-                  {profile.website}
-                </a>
-              </div>
-            )}
-            <div className="flex items-center gap-3 text-gray-400">
-              <svg className="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          {profile.website && (
+            <a href={profile.website} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+              style={{ color: V }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
               </svg>
-              <span className="text-sm font-medium">Joined {joinedDate}</span>
-            </div>
-          </div>
-
-          {/* Subscriber Count */}
-          <div className="flex gap-6">
-            <div>
-              <span className="text-white font-bold text-xl">{profile.subscriberCount.toLocaleString()}</span>
-              <span className="text-gray-400 text-sm ml-2">Subscribers</span>
-            </div>
-            <div>
-              <span className="text-white font-bold text-xl">{profile.postCount.toLocaleString()}</span>
-              <span className="text-gray-400 text-sm ml-2">Posts</span>
-            </div>
-          </div>
+              {profile.website.replace(/^https?:\/\//, "")}
+            </a>
+          )}
+          <span className="flex items-center gap-1.5">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Joined {joinedDate}
+          </span>
         </div>
 
-        {/* Tabs */}
-        <div className="flex border-b border-white/10 mt-10 gap-10">
-          <button
-            onClick={() => setActiveTab("posts")}
-            className={`pb-4 border-b-2 font-bold ${
-              activeTab === "posts"
-                ? "border-pink-500 text-pink-500"
-                : "border-transparent text-gray-500"
-            }`}
-          >
-            Posts
-          </button>
-          <button
-            onClick={() => setActiveTab("media")}
-            className={`pb-4 border-b-2 font-bold ${
-              activeTab === "media"
-                ? "border-pink-500 text-pink-500"
-                : "border-transparent text-gray-500"
-            }`}
-          >
-            Media
-          </button>
+        {/* Stats row */}
+        <div className="flex gap-3 flex-wrap mb-8">
+          <StatPill value={profile.subscriberCount} label="Fans" />
+          <StatPill value={profile.postCount}        label="Posts" />
+        </div>
+
+        {/* ── Tab bar ── */}
+        <div className="flex border-b mb-0" style={{ borderColor: BORDER }}>
+          {(["posts", "media"] as Tab[]).map((tab) => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              className="flex items-center gap-2 px-5 py-3 text-[12px] font-black border-b-2 capitalize transition-all"
+              style={activeTab === tab
+                ? { color: TEXT, borderColor: V, background: "rgba(124,58,237,0.06)" }
+                : { color: MUTED, borderColor: "transparent" }}>
+              {tab === "posts" ? "📝" : "🖼️"} {tab}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Content Area with Subscription Sidebar */}
-      <div className="max-w-7xl mx-auto px-8 py-8 flex gap-8">
-        {/* Posts */}
-        <div className="flex-1 space-y-8">
-          {posts.length === 0 ? (
-            <div className="text-center py-16">
-              <div className="text-6xl mb-4">📭</div>
-              <h3 className="text-white font-bold text-xl mb-2">No posts yet</h3>
-              <p className="text-gray-400">Check back later for new content!</p>
-            </div>
-          ) : (
-            posts.map(post => (
-              <ProfilePost
-                key={post.id}
-                post={post}
-                creator={{
-                  name: profile.name,
-                  username: profile.username,
-                  avatarUrl: profile.avatarUrl,
-                }}
-                isSubscribed={isSubscribed}
-                currentUserId={currentUserId}
-              />
-            ))
-          )}
-        </div>
+      {/* ── Content area ── */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        {activeTab === "posts" ? (
 
-        {/* Subscription Sidebar */}
-        {profile.isCreator && !isOwnProfile && !isSubscribed && (
-          <div className="w-400 space-y-5">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-sm font-black text-pink-500 uppercase tracking-[0.2em]">
-                Premium Access
-              </h3>
-              <span className="text-pink-500">✨</span>
-            </div>
+          /* ── POSTS tab: feed left, subscription sidebar right ── */
+          <div className="flex gap-6 items-start">
 
-            {/* Standard Tier */}
-            {profile.standardPrice && (
-              <div className="relative group cursor-pointer">
-                <div className="absolute inset-0 bg-linear-to-br from-blue-500 to-purple-600 blur-xl opacity-20 group-hover:opacity-40 transition-opacity rounded-3xl" />
-                <div className="relative p-6 rounded-3xl bg-white/5 backdrop-blur-sm border border-white/20 hover:border-white/40 transition-all overflow-hidden">
-                  <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <p className="text-[10px] font-black uppercase tracking-widest text-pink-400 mb-1">
-                        Standard Tier
-                      </p>
-                      <h4 className="text-2xl font-black text-white">
-                        ${profile.standardPrice.toFixed(2)}
-                        <span className="text-sm font-normal text-white/50 ml-1">/month</span>
-                      </h4>
-                    </div>
-                    <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center border border-white/20">
-                      ⭐
-                    </div>
-                  </div>
-                  <ul className="space-y-3 mb-6">
-                    <li className="flex items-center gap-3 text-sm text-white/80">
-                      <span className="text-pink-400">✓</span>
-                      All image posts & stories
-                    </li>
-                    <li className="flex items-center gap-3 text-sm text-white/80">
-                      <span className="text-pink-400">✓</span>
-                      Direct Messaging access
-                    </li>
-                  </ul>
-                  <button
-                    onClick={() => handleSubscribe("standard")}
-                    disabled={isSubscribing}
-                    className="w-full py-3 rounded-2xl bg-white text-pink-500 font-black hover:bg-opacity-90 transition-all disabled:opacity-50"
-                  >
-                    {isSubscribing ? "Processing..." : "Select Tier"}
-                  </button>
+            {/* Posts column */}
+            <div className="flex-1 min-w-0 flex flex-col gap-5">
+              {posts.length === 0 ? (
+                <div className="flex flex-col items-center gap-4 py-20 text-center rounded-[20px] border"
+                  style={{ background: CARD, borderColor: BORDER }}>
+                  <span className="text-5xl">📭</span>
+                  <p className="text-[16px] font-black" style={{ color: TEXT }}>No posts yet</p>
+                  <p className="text-[13px]" style={{ color: MUTED }}>Check back later for new content!</p>
                 </div>
-              </div>
+              ) : (
+                posts.map((post) => (
+                  <ProfilePost
+                    key={post.id}
+                    post={post}
+                    creator={{ name: profile.name, username: profile.username, avatarUrl: profile.avatarUrl }}
+                    isSubscribed={isSubscribed}
+                    currentUserId={currentUserId}
+                  />
+                ))
+              )}
+            </div>
+
+            {/* Subscription sidebar — right of posts */}
+            {showSidebar && (
+              <aside className="hidden lg:flex flex-col gap-4 w-72 flex-shrink-0">
+                {/* Sticky header */}
+                <div className="rounded-[20px] border p-4 flex flex-col gap-4"
+                  style={{ background: CARD, borderColor: BORDER, position: "sticky", top: 24 }}>
+
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest mb-1" style={{ color: MUTED }}>
+                      Unlock All Content
+                    </p>
+                    <p className="text-[13px]" style={{ color: "rgba(240,234,255,0.65)" }}>
+                      Subscribe to get full access to {profile.name}'s posts, videos and messages.
+                    </p>
+                  </div>
+
+                  {profile.standardPrice != null && (
+                    <SubCard
+                      tier="standard"
+                      price={profile.standardPrice}
+                      features={[
+                        "All posts & photos",
+                        "Direct messaging",
+                        "Early access to new content",
+                      ]}
+                      onSubscribe={() => handleSubscribe("standard")}
+                      isSubscribing={isSubscribing}
+                    />
+                  )}
+
+                  {profile.vipPrice != null && (
+                    <SubCard
+                      tier="vip"
+                      price={profile.vipPrice}
+                      features={[
+                        "Everything in Standard",
+                        "Full 4K video archive",
+                        "Priority DMs",
+                        "Custom content requests",
+                      ]}
+                      onSubscribe={() => handleSubscribe("vip")}
+                      isSubscribing={isSubscribing}
+                      isPopular
+                    />
+                  )}
+                </div>
+              </aside>
             )}
+          </div>
 
-            {/* VIP Tier */}
-            {profile.vipPrice && (
-              <div className="relative group cursor-pointer">
-                <div className="absolute inset-0 bg-linear-to-br from-pink-500 to-orange-500 blur-xl opacity-30 group-hover:opacity-50 transition-opacity rounded-3xl" />
-                <div className="relative p-6 rounded-3xl bg-linear-to-br from-pink-500 to-purple-600 border border-white/30 shadow-2xl hover:scale-[1.02] transition-all overflow-hidden">
-                  <div className="absolute -left-4 -bottom-4 w-32 h-32 bg-white/20 rounded-full blur-3xl" />
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-white">
-                          VIP Tier
-                        </p>
-                        <span className="px-2 py-0.5 bg-white text-pink-500 text-[8px] font-black rounded-full uppercase">
-                          Popular
-                        </span>
-                      </div>
-                      <h4 className="text-2xl font-black text-white">
-                        ${profile.vipPrice.toFixed(2)}
-                        <span className="text-sm font-normal text-white/70 ml-1">/month</span>
-                      </h4>
-                    </div>
-                    <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center border border-white/30">
-                      💎
-                    </div>
-                  </div>
-                  <ul className="space-y-3 mb-6">
-                    <li className="flex items-center gap-3 text-sm text-white">
-                      <span className="bg-white text-pink-500 rounded-full w-5 h-5 flex items-center justify-center text-xs">✓</span>
-                      Full 4K Video Archive
-                    </li>
-                    <li className="flex items-center gap-3 text-sm text-white">
-                      <span className="bg-white text-pink-500 rounded-full w-5 h-5 flex items-center justify-center text-xs">✓</span>
-                      Priority Private DM
-                    </li>
-                    <li className="flex items-center gap-3 text-sm text-white">
-                      <span className="bg-white text-pink-500 rounded-full w-5 h-5 flex items-center justify-center text-xs">✓</span>
-                      Custom content requests
-                    </li>
-                  </ul>
-                  <button
-                    onClick={() => handleSubscribe("vip")}
-                    disabled={isSubscribing}
-                    className="w-full py-4 rounded-2xl bg-white text-pink-500 font-black shadow-lg hover:shadow-xl transition-all disabled:opacity-50"
-                  >
-                    {isSubscribing ? "Processing..." : "Subscribe Now"}
-                  </button>
-                </div>
+        ) : (
+
+          /* ── MEDIA tab: masonry grid, all posts shown, locked = overlay ── */
+          <div>
+            {posts.length === 0 ? (
+              <div className="flex flex-col items-center gap-4 py-20 text-center rounded-[20px] border"
+                style={{ background: CARD, borderColor: BORDER }}>
+                <span className="text-5xl">🎬</span>
+                <p className="text-[16px] font-black" style={{ color: TEXT }}>No media yet</p>
+                <p className="text-[13px]" style={{ color: MUTED }}>Check back later for photos and videos!</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1">
+                {posts.map((post) => (
+                  <MediaTile
+                    key={post.id}
+                    post={post}
+                    onClick={() => !post.isLocked && setSelectedPost(post)}
+                  />
+                ))}
               </div>
             )}
           </div>
         )}
       </div>
+
+      {/* ── Media lightbox ── */}
+      {selectedPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.92)", backdropFilter: "blur(8px)" }}
+          onClick={() => setSelectedPost(null)}>
+          <div className="relative max-w-4xl w-full rounded-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setSelectedPost(null)}
+              className="absolute top-3 right-3 z-10 size-9 rounded-full flex items-center justify-center"
+              style={{ background: "rgba(0,0,0,0.6)", color: TEXT }}>✕</button>
+            {selectedPost.mediaType === "video" ? (
+              <video src={selectedPost.mediaUrl} controls autoPlay  className="w-full max-h-[85vh] object-contain"
+                controlsList="nodownload" onContextMenu={(e) => e.preventDefault()} />
+            ) : (
+              <img src={selectedPost.mediaUrl} alt="" className="w-full max-h-[85vh] object-contain" />
+            )}
+            {(selectedPost.description || selectedPost.title) && (
+              <div className="px-5 py-4" style={{ background: SURF }}>
+                <p className="text-[13px]" style={{ color: "rgba(240,234,255,0.8)" }}>
+                  {selectedPost.description ?? selectedPost.title}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

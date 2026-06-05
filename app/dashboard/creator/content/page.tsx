@@ -31,13 +31,14 @@ export default async function CreatorContentPage({
   const filter = params.filter as "all" | "published" | "locked" | undefined;
 
   // Build filters
-  const filters: any = {};
-  if (filter === "published") {
-    filters.isPublished = true;
-  }
-  if (filter === "locked") {
-    filters.isLocked = true;
-  }
+  // Build filters
+const filters: any = {};
+if (filter === "published") {
+  filters.status = "published";   // ✅ matches schema
+}
+if (filter === "locked") {
+  filters.isLocked = true;        // ✅ exists in schema
+}
 
   // Get posts
   const { posts, total } = await getCreatorPosts(creator.id, page, 12, filters);

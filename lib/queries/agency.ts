@@ -4,7 +4,7 @@
 
 import { db } from "@/db";
 import {
-  user, creators, agencies, subscriptions, posts, tips,
+  user, creators, agencies, messages,  subscriptions, agencyCreators,  posts, tips,
   transactions, profiles,
 } from "@/db/schema";
 import { eq, desc, count, sum, and, gte, sql } from "drizzle-orm";
@@ -138,7 +138,7 @@ export async function getAgencyCreators(
         (SELECT COALESCE(SUM(${tips.amount}), 0)
          FROM ${tips}
          WHERE ${tips.toCreatorId} = ${creators.id}
-           AND ${tips.paymentStatus} = 'completed'
+           AND ${tips.status} = 'completed'
            AND ${tips.createdAt} >= NOW() - INTERVAL '30 days')
       `.as("monthly_revenue"),
     })
@@ -231,14 +231,14 @@ export async function getAgencyCreatorDetails(
       .from(tips)
       .where(and(
         eq(tips.toCreatorId, creatorId),
-        eq(tips.paymentStatus, "completed")
+        eq(tips.status, "completed")
       )),
 
     db.select({ total: sum(tips.amount) })
       .from(tips)
       .where(and(
         eq(tips.toCreatorId, creatorId),
-        eq(tips.paymentStatus, "completed"),
+        eq(tips.status, "completed"),
         gte(tips.createdAt, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
       )),
   ]);
@@ -373,7 +373,7 @@ export async function getTopPerformers(agencyId: string, limit = 5) {
         (SELECT COALESCE(SUM(${tips.amount}), 0)
          FROM ${tips}
          WHERE ${tips.toCreatorId} = ${creators.id}
-           AND ${tips.paymentStatus} = 'completed'
+           AND ${tips.status} = 'completed'
            AND ${tips.createdAt} >= NOW() - INTERVAL '30 days')
       `.as("monthly_revenue"),
       subscriberGrowth: sql<number>`
@@ -398,4 +398,169 @@ export async function getTopPerformers(agencyId: string, limit = 5) {
     monthlyRevenue: Number(r.monthlyRevenue ?? 0),
     subscriberGrowth: r.subscriberGrowth ?? 0,
   }));
+}
+
+
+export async function getAgencyDashboardData(userId: string) {
+  // Get agency
+  const [agency] = await db
+    .select()
+    .from(agencies)
+    .where(eq(agencies.userId, userId))
+    .limit(1);
+
+  if (!agency) {
+    throw new Error("Agency not found");
+  }
+
+  // Get all creators managed by agency with stats
+  const agencyCreatorsData = await db.execute<{
+    creator_id: string;
+    creator_user_id: string;
+    creator_name: string;
+    username: string;
+    avatar_url: string | null;
+    is_verified: boolean;
+    subscriber_count: number;
+    post_count: number;
+    standard_price: string;
+    vip_price: string;
+    total_revenue: string;
+    active_subscribers: number;
+  }>(sql`
+    SELECT 
+      c.id as creator_id,
+      c.user_id as creator_user_id,
+      u.name as creator_name,
+      COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
+      p.avatar_url,
+      c.is_verified,
+      c.subscriber_count,
+      c.post_count,
+      c.standard_price,
+      c.vip_price,
+      COALESCE(SUM(s.price_at_subscription::decimal), 0)::text as total_revenue,
+      COUNT(DISTINCT CASE WHEN s.status = 'active' THEN s.id END)::int as active_subscribers
+    FROM ${agencyCreators} ac
+    JOIN ${creators} c ON ac.creator_id = c.id
+    JOIN ${user} u ON c.user_id = u.id
+    LEFT JOIN ${profiles} p ON u.id = p.id
+    LEFT JOIN ${subscriptions} s ON c.id = s.creator_id
+    WHERE ac.agency_id = ${agency.id}
+    GROUP BY c.id, c.user_id, u.name, p.username, u.email, p.avatar_url, c.is_verified, 
+             c.subscriber_count, c.post_count, c.standard_price, c.vip_price
+    ORDER BY c.subscriber_count DESC
+  `);
+
+  // Get agency-wide stats - ✅ FIXED: Access .rows[0] instead of destructuring
+  const statsResult = await db.execute<{
+    total_creators: number;
+    total_subscribers: number;
+    total_revenue: string;
+    total_posts: number;
+  }>(sql`
+    SELECT 
+      COUNT(DISTINCT c.id)::int as total_creators,
+      COUNT(DISTINCT CASE WHEN s.status = 'active' THEN s.id END)::int as total_subscribers,
+      COALESCE(SUM(s.price_at_subscription::decimal), 0)::text as total_revenue,
+      COALESCE(SUM(c.post_count), 0)::int as total_posts
+    FROM ${agencyCreators} ac
+    JOIN ${creators} c ON ac.creator_id = c.id
+    LEFT JOIN ${subscriptions} s ON c.id = s.creator_id
+    WHERE ac.agency_id = ${agency.id}
+  `);
+
+  const stats = statsResult.rows[0]; // ✅ FIXED: Get first row from result
+
+  return {
+    agency,
+    creators: agencyCreatorsData.rows,
+    stats,
+  };
+}
+
+
+export async function getCreatorFullStats(creatorId: string) {
+  // Revenue stats
+  const revenueStats = await db.execute<{
+    total_revenue: string;
+    monthly_revenue: string;
+    weekly_revenue: string;
+  }>(sql`
+    SELECT 
+      COALESCE(SUM(price_at_subscription::decimal), 0)::text as total_revenue,
+      COALESCE(SUM(CASE 
+        WHEN current_period_start >= NOW() - INTERVAL '30 days' 
+        THEN price_at_subscription::decimal 
+        ELSE 0 
+      END), 0)::text as monthly_revenue,
+      COALESCE(SUM(CASE 
+        WHEN current_period_start >= NOW() - INTERVAL '7 days' 
+        THEN price_at_subscription::decimal 
+        ELSE 0 
+      END), 0)::text as weekly_revenue
+    FROM ${subscriptions}
+    WHERE creator_id = ${creatorId}
+  `);
+
+  // Subscriber stats
+  const subscriberStats = await db.execute<{
+    total_subscribers: number;
+    active_subscribers: number;
+    new_this_month: number;
+    churn_this_month: number;
+  }>(sql`
+    SELECT 
+      COUNT(*)::int as total_subscribers,
+      COUNT(*) FILTER (WHERE status = 'active')::int as active_subscribers,
+      COUNT(*) FILTER (WHERE status = 'active' AND created_at >= NOW() - INTERVAL '30 days')::int as new_this_month,
+      COUNT(*) FILTER (WHERE status = 'cancelled' AND updated_at >= NOW() - INTERVAL '30 days')::int as churn_this_month
+    FROM ${subscriptions}
+    WHERE creator_id = ${creatorId}
+  `);
+
+  // Post stats
+  const postStats = await db.execute<{
+    total_posts: number;
+    this_month: number;
+    total_likes: number;
+    total_comments: number;
+    avg_engagement: string;
+  }>(sql`
+    SELECT 
+      COUNT(*)::int as total_posts,
+      COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::int as this_month,
+      COALESCE(SUM(like_count), 0)::int as total_likes,
+      COALESCE(SUM(comment_count), 0)::int as total_comments,
+      CASE 
+        WHEN COUNT(*) > 0 
+        THEN (COALESCE(SUM(like_count), 0) + COALESCE(SUM(comment_count), 0))::decimal / COUNT(*)
+        ELSE 0 
+      END::text as avg_engagement
+    FROM ${posts}
+    WHERE creator_id = ${creatorId} AND status = 'published'
+  `);
+
+  // Message stats
+  const messageStats = await db.execute<{
+    total_messages: number;
+    this_week: number;
+    unread_count: number;
+  }>(sql`
+    SELECT 
+      COUNT(*)::int as total_messages,
+      COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::int as this_week,
+      COUNT(*) FILTER (WHERE is_read = false)::int as unread_count
+    FROM ${messages}
+    WHERE from_user_id IN (
+      SELECT user_id FROM ${creators} WHERE id = ${creatorId}
+    )
+  `);
+
+  return {
+    revenue: revenueStats.rows[0],
+    subscribers: subscriberStats.rows[0],
+    posts: postStats.rows[0],
+    messages: messageStats.rows[0],
+  };
 }

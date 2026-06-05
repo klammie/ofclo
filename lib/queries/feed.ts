@@ -13,7 +13,7 @@ export async function getFeedPosts(userId: string, page: number = 1, limit: numb
     creator_avatar: string | null;
     title: string | null;
     description: string | null;
-    content_type: string;
+    media_type: string; // ✅ FIXED: Changed from content_type
     media_url: string;
     thumbnail_url: string | null;
     is_locked: boolean;
@@ -31,7 +31,7 @@ export async function getFeedPosts(userId: string, page: number = 1, limit: numb
       pr.avatar_url as creator_avatar,
       p.title,
       p.description,
-      p.content_type,
+      p.media_type,
       p.media_url,
       p.thumbnail_url,
       p.is_locked,
@@ -40,7 +40,7 @@ export async function getFeedPosts(userId: string, page: number = 1, limit: numb
       p.comment_count,
       p.created_at,
       EXISTS(
-        SELECT 1 FROM likes l 
+        SELECT 1 FROM ${likes} l 
         WHERE l.post_id = p.id AND l.user_id = ${userId}
       ) as is_liked
     FROM ${posts} p
@@ -50,6 +50,7 @@ export async function getFeedPosts(userId: string, page: number = 1, limit: numb
     LEFT JOIN ${profiles} pr ON u.id = pr.id
     WHERE s.user_id = ${userId}
       AND s.status = 'active'
+      AND p.status = 'published'
     ORDER BY p.created_at DESC
     LIMIT ${limit}
     OFFSET ${offset}
@@ -57,13 +58,15 @@ export async function getFeedPosts(userId: string, page: number = 1, limit: numb
 
   return results.rows.map(row => ({
     id: row.post_id,
-    creatorId: row.creator_id,
-    creatorName: row.creator_name,
-    creatorUsername: row.creator_username,
-    creatorAvatar: row.creator_avatar,
+    creator: {
+      id: row.creator_id,
+      name: row.creator_name,
+      username: row.creator_username,
+      avatarUrl: row.creator_avatar,
+    },
     title: row.title,
     description: row.description,
-    mediaType: row.content_type,
+    mediaType: row.media_type, // ✅ FIXED
     mediaUrl: row.media_url,
     thumbnailUrl: row.thumbnail_url,
     isLocked: row.is_locked,

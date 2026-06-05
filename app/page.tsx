@@ -1,16 +1,14 @@
-import { Button } from "@/components/ui/button";
-import Link from "next/link";
+
 import { getSession } from "./lib/auth";
 import { redirect } from "next/navigation";
-
+import LandingPageShell from "@/components/landing/LandingPageShell";
+;
 
 const LandingPage = async () => {
   const session = await getSession();
 
-  if (session) redirect("/home")
-  return <div>This is the landing page
-    <Link href="/login"><Button>Login</Button></Link>
-  </div>;
+  if (session) redirect("/dashboard/user/feed")
+  return <LandingPageShell />;
 };
 
 export default LandingPage;

@@ -95,7 +95,7 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
     id: string;
     title: string | null;
     description: string | null;
-    content_type: string;
+    media_type: string;
     media_url: string;
     thumbnail_url: string | null;
     is_locked: boolean;
@@ -108,7 +108,7 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
       p.id,
       p.title,
       p.description,
-      p.content_type,
+      p.media_type,
       p.media_url,
       p.thumbnail_url,
       p.is_locked,
@@ -127,7 +127,7 @@ export default async function UserProfilePage({ params }: ProfilePageProps) {
     id: post.id,
     title: post.title,
     description: post.description,
-    mediaType: post.content_type,
+    mediaType: post.media_type,
     mediaUrl: post.media_url,
     thumbnailUrl: post.thumbnail_url,
     isLocked: post.is_locked,

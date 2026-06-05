@@ -1,9 +1,8 @@
+import { session } from '@/db/schema'
+import { redirect } from 'next/navigation'
 import React from 'react'
 
 export default function DashboardPage() {
-  return (
-    <div>
-      Welocme to the Dash!
-    </div>
-  )
+  if (session) return redirect("/dashboard/user/feed");
+   
 }

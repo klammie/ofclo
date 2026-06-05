@@ -7,7 +7,7 @@
 
 import {
   pgTable, pgEnum, text, integer, boolean,
-  timestamp, decimal, date, uuid, index, uniqueIndex,
+  timestamp, decimal, date, uuid, index, serial, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -19,6 +19,7 @@ export const user = pgTable("user", {
   id:            text("id").primaryKey(),
   name:          text("name").notNull(),
   email:         text("email").notNull().unique(),
+  password: text("password"),
   emailVerified: boolean("email_verified").notNull().default(false),
   image:         text("image"),
   // ── BetterAuth admin plugin adds this column ──────────────────────────────
@@ -96,20 +97,39 @@ export const profiles = pgTable("profiles", {
   usernameIdx: uniqueIndex("profiles_username_idx").on(t.username),
 }));
 
-// ── agencies ──────────────────────────────────────────────────────────────────
+// Agency table
 export const agencies = pgTable("agencies", {
   id:             uuid("id").defaultRandom().primaryKey(),
-  userId:         text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  userId:         text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }).unique(),
   name:           text("name").notNull(),
-  description:    text("description"),
+  email:          text("email").notNull(),
   logoUrl:        text("logo_url"),
-  commissionRate: decimal("commission_rate", { precision: 5, scale: 2 }).notNull().default("20.00"),
-  isVerified:     boolean("is_verified").notNull().default(false),
+  description:    text("description"),
+  websiteUrl:     text("website_url"),
+  totalCreators:  integer("total_creators").notNull().default(0),
+  totalRevenue:   decimal("total_revenue", { precision: 12, scale: 2 }).notNull().default("0.00"),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
-  userIdIdx: index("agencies_user_id_idx").on(t.userId),
+  userIdx: index("agencies_user_idx").on(t.userId),
 }));
+
+// Agency-Creator relationship
+export const agencyCreators = pgTable("agency_creators", {
+  id:          uuid("id").defaultRandom().primaryKey(),
+  agencyId:    uuid("agency_id").notNull().references(() => agencies.id, { onDelete: "cascade" }),
+  creatorId:   uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  addedAt:     timestamp("added_at").notNull().defaultNow(),
+  permissions: text("permissions").notNull().default("full"), // 'full', 'view_only', 'limited'
+}, t => ({
+  agencyIdx:   index("agency_creators_agency_idx").on(t.agencyId),
+  creatorIdx:  index("agency_creators_creator_idx").on(t.creatorId),
+  uniquePair:  index("agency_creators_unique_idx").on(t.agencyId, t.creatorId),
+}));
+
+export type Agency = typeof agencies.$inferSelect;
+export type NewAgency = typeof agencies.$inferInsert;
+export type AgencyCreator = typeof agencyCreators.$inferSelect;
 
 // ── creators ──────────────────────────────────────────────────────────────────
 export const creators = pgTable("creators", {
@@ -135,27 +155,60 @@ export const creators = pgTable("creators", {
 }));
 
 // ── posts ─────────────────────────────────────────────────────────────────────
+
 export const posts = pgTable("posts", {
   id:           uuid("id").defaultRandom().primaryKey(),
-  creatorId:    uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
-  title:        text("title").notNull(),
+  creatorId:    uuid("creator_id")
+                  .notNull()
+                  .references(() => creators.id, { onDelete: "cascade" }),
+
+  // Media fields
+  title:        text("title"),
   description:  text("description"),
-  contentType:  contentTypeEnum("content_type").notNull(),
+  mediaType:    text("media_type").notNull(), // 'image' | 'video'
   mediaUrl:     text("media_url").notNull(),
   thumbnailUrl: text("thumbnail_url"),
+  duration:     integer("duration"),          // Video duration in seconds
+  mediaCount:   integer("media_count").notNull().default(1),
+
+  // Access control
   isLocked:     boolean("is_locked").notNull().default(false),
   ppvPrice:     decimal("ppv_price", { precision: 10, scale: 2 }),
-  likeCount:    integer("like_count").notNull().default(0),
+
+  // Scheduling
+  status:       text("status").notNull().default("published"), // 'draft' | 'scheduled' | 'published'
+  scheduledFor: timestamp("scheduled_for"), // When to publish
+  publishedAt:  timestamp("published_at"),  // When actually published
+
+  // Engagement metrics
   viewCount:    integer("view_count").notNull().default(0),
+  likeCount:    integer("like_count").notNull().default(0),
   commentCount: integer("comment_count").notNull().default(0),
-  isPublished:  boolean("is_published").notNull().default(true),
-  scheduledAt:  timestamp("scheduled_at"),
+  unlockCount:  integer("unlock_count").notNull().default(0),
+  revenue:      decimal("revenue", { precision: 10, scale: 2 }).notNull().default("0"),
+
+  // Timestamps
   createdAt:    timestamp("created_at").notNull().defaultNow(),
   updatedAt:    timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
-  creatorIdIdx: index("posts_creator_id_idx").on(t.creatorId),
-  createdAtIdx: index("posts_created_at_idx").on(t.createdAt),
+  creatorIdx:   index("posts_creator_idx").on(t.creatorId),
+  createdIdx:   index("posts_created_idx").on(t.createdAt),
+  statusIdx:    index("posts_status_idx").on(t.status),
+  scheduledIdx: index("posts_scheduled_idx").on(t.scheduledFor),
 }));
+
+
+// ---Post Media---------------------------
+export const postMedia = pgTable("post_media", {
+  id:           serial("id").primaryKey(),
+  postId:       uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  sortOrder:    integer("sort_order").notNull().default(0),
+  mediaType:    text("media_type").notNull(),
+  mediaUrl:     text("media_url").notNull(),
+  thumbnailUrl: text("thumbnail_url"),
+  duration:     integer("duration"),
+  createdAt:    timestamp("created_at").notNull().defaultNow(),
+});
 
 // ── Likes ─────────────────────────────────────────────────────────────
 
@@ -212,23 +265,41 @@ export const subscriptions = pgTable("subscriptions", {
   uniqueActiveSub: uniqueIndex("subs_unique_active_idx").on(t.userId, t.creatorId),
 }));
 
-// ── tips ──────────────────────────────────────────────────────────────────────
-export const tips = pgTable("tips", {
-  id:              uuid("id").defaultRandom().primaryKey(),
-  fromUserId:      text("from_user_id").notNull().references(() => user.id),
-  toCreatorId:     uuid("to_creator_id").notNull().references(() => creators.id),
-  amount:          decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  message:         text("message"),
-  isAnonymous:     boolean("is_anonymous").notNull().default(false),
-  maxelpayOrderId: text("maxelpay_order_id"),
-  cryptoCurrency:  text("crypto_currency"),
-  paymentStatus:   cryptoPayStatusEnum("payment_status").notNull().default("initiated"),
-  createdAt:       timestamp("created_at").notNull().defaultNow(),
+
+// Bookmarks Table
+export const bookmarks = pgTable("bookmarks", {
+  id:         uuid("id").defaultRandom().primaryKey(),
+  userId:     text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  postId:     uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  createdAt:  timestamp("created_at").notNull().defaultNow(),
 }, t => ({
-  toCreatorIdx: index("tips_to_creator_idx").on(t.toCreatorId),
-  fromUserIdx:  index("tips_from_user_idx").on(t.fromUserId),
-  orderIdx:     index("tips_order_id_idx").on(t.maxelpayOrderId),
+  userIdx:    index("bookmarks_user_idx").on(t.userId),
+  postIdx:    index("bookmarks_post_idx").on(t.postId),
+  uniquePair: index("bookmarks_unique_idx").on(t.userId, t.postId),
 }));
+
+// Tips Table
+export const tips = pgTable("tips", {
+  id:          uuid("id").defaultRandom().primaryKey(),
+  fromUserId:  text("from_user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  toCreatorId: uuid("to_creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  postId:      uuid("post_id").references(() => posts.id, { onDelete: "set null" }), // Optional: tip on specific post
+  messageId:   uuid("message_id").references(() => messages.id, { onDelete: "set null" }), // Optional: tip on message
+  amount:      decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  message:     text("message"), // Optional tip message
+  status:      text("status").notNull().default("completed"), // 'pending', 'completed', 'failed'
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
+}, t => ({
+  fromUserIdx:  index("tips_from_user_idx").on(t.fromUserId),
+  toCreatorIdx: index("tips_to_creator_idx").on(t.toCreatorId),
+  postIdx:      index("tips_post_idx").on(t.postId),
+  createdIdx:   index("tips_created_idx").on(t.createdAt),
+}));
+
+export type Bookmark = typeof bookmarks.$inferSelect;
+export type NewBookmark = typeof bookmarks.$inferInsert;
+export type Tip = typeof tips.$inferSelect;
+export type NewTip = typeof tips.$inferInsert;
 
 // ── ppv_unlocks ───────────────────────────────────────────────────────────────
 export const ppvUnlocks = pgTable("ppv_unlocks", {
@@ -442,32 +513,30 @@ export type NewPPVPurchase = typeof ppvPurchases.$inferInsert;
  * Tracks conversation metadata (last message, unread count, etc.)
  */
 export const conversations = pgTable("conversations", {
-  id:                 uuid("id").defaultRandom().primaryKey(),
-  
-  // Participants (ordered alphabetically for consistency)
-  participant1Id:     text("participant1_id")
+  id: uuid("id").defaultRandom().primaryKey(),
+
+  participant1Id: text("participant1_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
-  participant2Id:     text("participant2_id")
+  participant2Id: text("participant2_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
-  
+
   // Last message info
-  lastMessageId:      uuid("last_message_id"),
+  lastMessageId: uuid("last_message_id"),
   lastMessageContent: text("last_message_content"),
-  lastMessageAt:      timestamp("last_message_at"),
-  
-  // Unread counts (per participant)
-  unreadCountUser1:   integer("unread_count_user1").notNull().default(0),
-  unreadCountUser2:   integer("unread_count_user2").notNull().default(0),
-  
-  // Timestamps
-  createdAt:          timestamp("created_at").notNull().defaultNow(),
-  updatedAt:          timestamp("updated_at").notNull().defaultNow(),
+  lastMessageAt: timestamp("last_message_at"),
+  lastMessageSenderId: text("last_message_sender_id"), // 👈 new column
+
+  unreadCountUser1: integer("unread_count_user1").notNull().default(0),
+  unreadCountUser2: integer("unread_count_user2").notNull().default(0),
+
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, t => ({
-  // Unique constraint on participant pair
   participantsIdx: index("conv_participants_idx").on(t.participant1Id, t.participant2Id),
 }));
+
 
 // Type inference
 export type Message = typeof messages.$inferSelect;
@@ -526,3 +595,870 @@ export const postsRelations = relations(posts, ({ one, many }) => ({
   ppvUnlocks: many(ppvUnlocks),
   reports:    many(reports),
 }));
+
+
+// Creator Campaigns/Goals Table
+export const campaigns = pgTable("campaigns", {
+  id:              uuid("id").defaultRandom().primaryKey(),
+  creatorId:       uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  title:           text("title").notNull(),
+  description:     text("description").notNull(),
+  goalAmount:      decimal("goal_amount", { precision: 10, scale: 2 }).notNull(),
+  currentAmount:   decimal("current_amount", { precision: 10, scale: 2 }).notNull().default("0.00"),
+  currency:        text("currency").notNull().default("USD"),
+  deadline:        timestamp("deadline"), // Optional deadline
+  status:          text("status").notNull().default("active"), // 'active', 'completed', 'cancelled'
+  imageUrl:        text("image_url"),
+  donorCount:      integer("donor_count").notNull().default(0),
+  topDonorId:      text("top_donor_id").references(() => user.id),
+  topDonorAmount:  decimal("top_donor_amount", { precision: 10, scale: 2 }).default("0.00"),
+  createdAt:       timestamp("created_at").notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at").notNull().defaultNow(),
+  completedAt:     timestamp("completed_at"),
+}, t => ({
+  creatorIdx: index("campaigns_creator_idx").on(t.creatorId),
+  statusIdx:  index("campaigns_status_idx").on(t.status),
+}));
+
+// Campaign Donations Table
+export const campaignDonations = pgTable("campaign_donations", {
+  id:          uuid("id").defaultRandom().primaryKey(),
+  campaignId:  uuid("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  userId:      text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  amount:      decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  message:     text("message"),
+  isAnonymous: boolean("is_anonymous").notNull().default(false),
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
+}, t => ({
+  campaignIdx: index("campaign_donations_campaign_idx").on(t.campaignId),
+  userIdx:     index("campaign_donations_user_idx").on(t.userId),
+  createdIdx:  index("campaign_donations_created_idx").on(t.createdAt),
+}));
+
+// Top Fan Badges Table
+export const topFanBadges = pgTable("top_fan_badges", {
+  id:         uuid("id").defaultRandom().primaryKey(),
+  userId:     text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  creatorId:  uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  badgeType:  text("badge_type").notNull(), // 'top_donor', 'top_tipper', 'loyal_subscriber'
+  earnedAt:   timestamp("earned_at").notNull().defaultNow(),
+  metadata:   text("metadata"), // JSON string for additional info
+}, t => ({
+  userIdx:    index("top_fan_badges_user_idx").on(t.userId),
+  creatorIdx: index("top_fan_badges_creator_idx").on(t.creatorId),
+  uniquePair: index("top_fan_badges_unique_idx").on(t.userId, t.creatorId, t.badgeType),
+}));
+
+export type Campaign = typeof campaigns.$inferSelect;
+export type NewCampaign = typeof campaigns.$inferInsert;
+export type CampaignDonation = typeof campaignDonations.$inferSelect;
+export type NewCampaignDonation = typeof campaignDonations.$inferInsert;
+export type TopFanBadge = typeof topFanBadges.$inferSelect;
+export type NewTopFanBadge = typeof topFanBadges.$inferInsert;
+
+
+// Auto Messages Table
+export const autoMessages = pgTable("auto_messages", {
+  id:          uuid("id").defaultRandom().primaryKey(),
+  creatorId:   uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+  triggerType: text("trigger_type").notNull(), // 'new_subscription', 'subscription_renewal', 'tip_received', 'ppv_unlock', 'birthday', 'custom_date'
+  tier:        text("tier"), // 'standard', 'vip', null for all tiers
+  messageText: text("message_text").notNull(),
+  mediaUrl:    text("media_url"), // Optional image/video
+  mediaType:   text("media_type"), // 'image' | 'video'
+  delayMinutes: integer("delay_minutes").notNull().default(0), // Delay before sending (0 = immediate)
+  isActive:    boolean("is_active").notNull().default(true),
+  sentCount:   integer("sent_count").notNull().default(0),
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
+  updatedAt:   timestamp("updated_at").notNull().defaultNow(),
+}, t => ({
+  creatorIdx:  index("auto_messages_creator_idx").on(t.creatorId),
+  triggerIdx:  index("auto_messages_trigger_idx").on(t.triggerType),
+}));
+
+// Auto Message Queue (for scheduled sends)
+export const autoMessageQueue = pgTable("auto_message_queue", {
+  id:            uuid("id").defaultRandom().primaryKey(),
+  autoMessageId: uuid("auto_message_id").notNull().references(() => autoMessages.id, { onDelete: "cascade" }),
+  userId:        text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  scheduledFor:  timestamp("scheduled_for").notNull(),
+  status:        text("status").notNull().default("pending"), // 'pending', 'sent', 'failed'
+  sentAt:        timestamp("sent_at"),
+  createdAt:     timestamp("created_at").notNull().defaultNow(),
+}, t => ({
+  scheduledIdx: index("auto_message_queue_scheduled_idx").on(t.scheduledFor),
+  statusIdx:    index("auto_message_queue_status_idx").on(t.status),
+}));
+
+export type AutoMessage = typeof autoMessages.$inferSelect;
+export type NewAutoMessage = typeof autoMessages.$inferInsert;
+export type AutoMessageQueue = typeof autoMessageQueue.$inferSelect;
+
+export const rewardTypeEnum = pgEnum("reward_type", [
+  "xp",
+  "coins",
+  "badge",
+  "exclusive_content",
+  "streak_freeze",
+  "mystery_box",
+]);
+ 
+// ─── Day Config ───────────────────────────────────────────────────────────────
+// Configures each reward slot (1–7) for a given fan pass season.
+ 
+export const loginBonusDayConfig = pgTable("login_bonus_day_config", {
+  id: serial("id").primaryKey(),
+  seasonId: integer("season_id").notNull(),
+  daySlot: integer("day_slot").notNull(),       // 1 (Mon) → 7 (Sun)
+  label: text("label").notNull(),               // "Mon", "Tue" …
+  icon: text("icon").notNull(),                 // emoji
+  rewardType: rewardTypeEnum("reward_type").notNull().default("xp"),
+  rewardAmount: integer("reward_amount").notNull().default(25),
+  rewardLabel: text("reward_label").notNull(),  // "+25 XP"
+  isSpecialDay: boolean("is_special_day").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+ 
+// ─── Streak Milestones ────────────────────────────────────────────────────────
+ 
+export const loginStreakMilestone = pgTable("login_streak_milestone", {
+  id: serial("id").primaryKey(),
+  seasonId: integer("season_id").notNull(),
+  streakDays: integer("streak_days").notNull(), // 3, 7, 14, 30
+  title: text("title").notNull(),
+  icon: text("icon").notNull(),
+  rewardType: rewardTypeEnum("reward_type").notNull(),
+  rewardAmount: integer("reward_amount").notNull().default(0),
+  rewardLabel: text("reward_label").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+ 
+// ─── User Login Streak ────────────────────────────────────────────────────────
+ 
+export const userLoginStreak = pgTable(
+  "user_login_streak",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id").notNull(),           // references better-auth user id
+    seasonId: integer("season_id").notNull(),
+    currentStreak: integer("current_streak").notNull().default(0),
+    longestStreak: integer("longest_streak").notNull().default(0),
+    lastClaimedAt: timestamp("last_claimed_at"),
+    currentDaySlot: integer("current_day_slot").notNull().default(1),
+    streakFreezes: integer("streak_freezes").notNull().default(0),
+    totalXpEarned: integer("total_xp_earned").notNull().default(0),
+    totalCoinsEarned: integer("total_coins_earned").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    userSeasonIdx: uniqueIndex("user_season_idx").on(t.userId, t.seasonId),
+  })
+);
+ 
+// ─── Daily Claim Log ──────────────────────────────────────────────────────────
+ 
+export const loginClaimLog = pgTable("login_claim_log", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  seasonId: integer("season_id").notNull(),
+  daySlot: integer("day_slot").notNull(),
+  rewardType: rewardTypeEnum("reward_type").notNull(),
+  rewardAmount: integer("reward_amount").notNull(),
+  streakAtClaim: integer("streak_at_claim").notNull(),
+  isVip: boolean("is_vip").notNull().default(false),
+  bonusMultiplier: integer("bonus_multiplier").notNull().default(1),
+  claimedAt: timestamp("claimed_at").defaultNow().notNull(),
+});
+ 
+// ─── Milestone Claim Log ──────────────────────────────────────────────────────
+ 
+export const milestoneClaimLog = pgTable(
+  "milestone_claim_log",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    milestoneId: integer("milestone_id").notNull(),
+    seasonId: integer("season_id").notNull(),
+    claimedAt: timestamp("claimed_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    userMilestoneIdx: uniqueIndex("user_milestone_idx").on(
+      t.userId,
+      t.milestoneId
+    ),
+  })
+);
+ 
+// ─── Types ────────────────────────────────────────────────────────────────────
+ 
+export type LoginBonusDayConfig = typeof loginBonusDayConfig.$inferSelect;
+export type LoginStreakMilestone = typeof loginStreakMilestone.$inferSelect;
+export type UserLoginStreak = typeof userLoginStreak.$inferSelect;
+export type LoginClaimLog = typeof loginClaimLog.$inferSelect;
+export type MilestoneClaimLog = typeof milestoneClaimLog.$inferSelect;
+
+export const shopItemTypeEnum = pgEnum("shop_item_type", [
+  "badge",
+  "booster_xp",
+  "booster_coin",
+  "gift",
+  "vip_pass",
+  "streak_freeze",
+  "mystery_box",
+  "emote",
+]);
+ 
+export const shopItemRarityEnum = pgEnum("shop_item_rarity", [
+  "common",
+  "rare",
+  "epic",
+  "legendary",
+]);
+ 
+export const shopCurrencyEnum = pgEnum("shop_currency", ["coins", "real"]);
+ 
+// ─── Shop Items (catalog) ─────────────────────────────────────────────────────
+ 
+export const shopItems = pgTable("shop_items", {
+  id: text("id").primaryKey(),                          // e.g. "badge_flame"
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  icon: text("icon").notNull(),                         // emoji
+  type: shopItemTypeEnum("type").notNull(),
+  category: text("category").notNull(),                 // matches ShopCategory
+  rarity: shopItemRarityEnum("rarity").notNull().default("common"),
+  coinPrice: integer("coin_price").notNull().default(0),
+  realPriceCents: integer("real_price_cents"),           // null = coins only
+  isCoinsOnly: boolean("is_coins_only").notNull().default(true),
+  isRealMoneyOnly: boolean("is_real_money_only").notNull().default(false),
+  isFeatured: boolean("is_featured").notNull().default(false),
+  isLimitedTime: boolean("is_limited_time").notNull().default(false),
+  expiresAt: timestamp("expires_at"),
+  stock: integer("stock"),                              // null = unlimited
+  boosterMultiplier: integer("booster_multiplier"),     // e.g. 2 for 2×
+  boosterDurationHours: integer("booster_duration_hours"),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+ 
+// ─── User Inventory ───────────────────────────────────────────────────────────
+ 
+export const userInventory = pgTable("user_inventory", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  itemId: text("item_id").notNull(),         // FK → shop_items.id
+  quantity: integer("quantity").notNull().default(1),
+  // For boosters: when the active boost expires
+  boosterActiveUntil: timestamp("booster_active_until"),
+  purchasedAt: timestamp("purchased_at").defaultNow().notNull(),
+  isEquipped:        boolean("is_equipped").default(false),
+  source:            text("source").default("purchased"), // "purchased" | "mystery_box" | "fan_pass" | "quest"
+  updatedAt:         timestamp("updated_at").defaultNow(),
+});
+ 
+// ─── Purchase Log ─────────────────────────────────────────────────────────────
+ 
+export const shopPurchaseLog = pgTable("shop_purchase_log", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  itemId: text("item_id").notNull(),
+  currency: shopCurrencyEnum("currency").notNull(),
+  coinAmount: integer("coin_amount"),       // coins spent (null if real money)
+  realAmountCents: integer("real_amount_cents"), // null if coins
+  coinsAfterPurchase: integer("coins_after_purchase"),
+  purchasedAt: timestamp("purchased_at").defaultNow().notNull(),
+});
+ 
+// ─── User Coin Balance ────────────────────────────────────────────────────────
+// You may already have a coins column on your users table.
+// If not, add this separate balance table.
+ 
+export const userCoinBalance = pgTable("user_coin_balance", {
+  userId: text("user_id").primaryKey(),
+  balance: integer("balance").notNull().default(0),
+  lifetimeEarned: integer("lifetime_earned").notNull().default(0),
+  lifetimeSpent: integer("lifetime_spent").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Types ────────────────────────────────────────────────────────────────────
+ 
+export type ShopItemRow       = typeof shopItems.$inferSelect;
+export type UserInventoryRow  = typeof userInventory.$inferSelect;
+export type ShopPurchaseLogRow = typeof shopPurchaseLog.$inferSelect;
+export type UserCoinBalanceRow = typeof userCoinBalance.$inferSelect;
+ 
+
+export const txTypeEnum = pgEnum("tx_type", [
+  "deposit",
+  "withdrawal",
+  "subscription",
+  "tip",
+  "ppv",
+  "coin_purchase",
+  "coin_spend",
+  "coin_earn",
+  "refund",
+  "creator_earning",
+  "platform_fee",
+  "crypto_deposit",
+]);
+ 
+export const txStatusEnum = pgEnum("tx_status", [
+  "pending",
+  "completed",
+  "failed",
+  "refunded",
+]);
+ 
+export const txCurrencyEnum = pgEnum("tx_currency", ["usd", "coins", "crypto"]);
+ 
+// ─── User Wallet ──────────────────────────────────────────────────────────────
+ 
+export const userWallet = pgTable("user_wallet", {
+  userId: text("user_id").primaryKey(),
+  // USD balances (all in cents)
+  usdBalance: integer("usd_balance").notNull().default(0),
+  pendingBalance: integer("pending_balance").notNull().default(0),
+  lifetimeDeposited: integer("lifetime_deposited").notNull().default(0),
+  lifetimeSpent: integer("lifetime_spent").notNull().default(0),
+  lifetimeEarned: integer("lifetime_earned").notNull().default(0),
+  lifetimeWithdrawn: integer("lifetime_withdrawn").notNull().default(0),
+  // Coin balance (integer units)
+  coinsBalance: integer("coins_balance").notNull().default(0),
+  lifetimeCoinsEarned: integer("lifetime_coins_earned").notNull().default(0),
+  lifetimeCoinsSpent: integer("lifetime_coins_spent").notNull().default(0),
+  // KYC / payout eligibility
+  isVerified: boolean("is_verified").notNull().default(false),
+  canWithdraw: boolean("can_withdraw").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Wallet Transactions ──────────────────────────────────────────────────────
+ 
+export const walletTransactions = pgTable("wallet_transactions", {
+  id: text("id").primaryKey(),                    // uuid
+  userId: text("user_id").notNull(),
+  type: txTypeEnum("type").notNull(),
+  status: txStatusEnum("status").notNull().default("pending"),
+  currency: txCurrencyEnum("currency").notNull(),
+  amountCents: integer("amount_cents").notNull().default(0),
+  coinsAmount: integer("coins_amount").notNull().default(0),
+  description: text("description").notNull(),
+  // Optional metadata (JSON string)
+  metadata: text("metadata"),
+  // Optional linked entities
+  linkedUserId: text("linked_user_id"),           // creator / other user
+  linkedEntityId: text("linked_entity_id"),       // post / subscription id
+  // External payment refs
+  externalTxId: text("external_tx_id"),           // Maxelpay / crypto tx id
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Coin Packages ────────────────────────────────────────────────────────────
+ 
+export const coinPackages = pgTable("coin_packages", {
+  id: text("id").primaryKey(),
+  coins: integer("coins").notNull(),
+  priceCents: integer("price_cents").notNull(),
+  bonusCoins: integer("bonus_coins").notNull().default(0),
+  isBestValue: boolean("is_best_value").notNull().default(false),
+  isMostPopular: boolean("is_most_popular").notNull().default(false),
+  cryptoEnabled: boolean("crypto_enabled").notNull().default(true),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+ 
+// ─── Crypto Invoices ──────────────────────────────────────────────────────────
+ 
+export const cryptoInvoices = pgTable("crypto_invoices", {
+  id: text("id").primaryKey(),                    // uuid
+  userId: text("user_id").notNull(),
+  transactionId: text("transaction_id").notNull(),
+  cryptoCurrency: text("crypto_currency").notNull(),  // BTC, ETH, USDT…
+  cryptoAmount: text("crypto_amount").notNull(),
+  walletAddress: text("wallet_address").notNull(),
+  usdAmountCents: integer("usd_amount_cents").notNull(),
+  status: txStatusEnum("status").notNull().default("pending"),
+  expiresAt: timestamp("expires_at").notNull(),
+  confirmedAt: timestamp("confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+ 
+// ─── Types ────────────────────────────────────────────────────────────────────
+ 
+export type UserWalletRow       = typeof userWallet.$inferSelect;
+export type WalletTransactionRow = typeof walletTransactions.$inferSelect;
+export type CoinPackageRow      = typeof coinPackages.$inferSelect;
+export type CryptoInvoiceRow    = typeof cryptoInvoices.$inferSelect;
+
+export const notificationTypeEnum = pgEnum("notification_type", [
+  "new_subscriber",
+  "new_message",
+  "new_tip",
+  "new_like",
+  "new_comment",
+  "subscription_expiring",
+  "new_post",
+  "ppv_purchased",
+  "campaign_milestone",
+  "campaign_reward",
+  "coin_earned",
+  "level_up",
+  "streak_reminder",
+  "streak_broken",
+  "shop_purchase",
+  "withdrawal_approved",
+  "withdrawal_rejected",
+  "deposit_confirmed",
+  "system",
+  "welcome",
+]);
+ 
+export const notificationPriorityEnum = pgEnum("notification_priority", [
+  "low",
+  "medium",
+  "high",
+]);
+ 
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),               // uuid
+    userId: text("user_id").notNull(),
+    type: notificationTypeEnum("type").notNull(),
+    priority: notificationPriorityEnum("priority").notNull().default("medium"),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    icon: text("icon").notNull().default("🔔"),
+    imageUrl: text("image_url"),
+    actionUrl: text("action_url"),
+    isRead: boolean("is_read").notNull().default(false),
+    // Optional actor info (denormalised for perf)
+    actorId: text("actor_id"),
+    actorName: text("actor_name"),
+    actorAvatar: text("actor_avatar"),
+    entityId: text("entity_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    readAt: timestamp("read_at"),
+  },
+  (t) => ({
+    userIdIdx:   index("notif_user_id_idx").on(t.userId),
+    createdIdx:  index("notif_created_idx").on(t.createdAt),
+    unreadIdx:   index("notif_unread_idx").on(t.userId, t.isRead),
+  })
+);
+ 
+export type NotificationRow = typeof notifications.$inferSelect;
+
+export const profileVisibilityEnum = pgEnum("profile_visibility", [
+  "public", "followers", "private",
+]);
+export const messagePermissionEnum = pgEnum("message_permission", [
+  "everyone", "subscribers", "nobody",
+]);
+export const themeModeEnum  = pgEnum("theme_mode",   ["dark", "light", "system"]);
+export const accentColorEnum = pgEnum("accent_color", ["pink", "purple", "blue", "green", "orange", "red"]);
+export const fontSizeEnum    = pgEnum("font_size",    ["small", "medium", "large"]);
+export const contentLayoutEnum = pgEnum("content_layout", ["grid", "list"]);
+ 
+// ─── Profile Settings ─────────────────────────────────────────────────────────
+ 
+export const userProfileSettings = pgTable("user_profile_settings", {
+  userId:      text("user_id").primaryKey(),
+  displayName: text("display_name").notNull().default(""),
+  username:    text("username").notNull().default(""),
+  bio:         text("bio").notNull().default(""),
+  location:    text("location").notNull().default(""),
+  website:     text("website").notNull().default(""),
+  avatarUrl:   text("avatar_url"),
+  bannerUrl:   text("banner_url"),
+  dateOfBirth: text("date_of_birth"),
+  updatedAt:   timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Privacy Settings ─────────────────────────────────────────────────────────
+ 
+export const userPrivacySettings = pgTable("user_privacy_settings", {
+  userId:             text("user_id").primaryKey(),
+  profileVisibility:  profileVisibilityEnum("profile_visibility").notNull().default("public"),
+  showActivityStatus: boolean("show_activity_status").notNull().default(true),
+  showSubscriptions:  boolean("show_subscriptions").notNull().default(false),
+  allowTagging:       boolean("allow_tagging").notNull().default(true),
+  messagePermission:  messagePermissionEnum("message_permission").notNull().default("subscribers"),
+  allowComments:      boolean("allow_comments").notNull().default(true),
+  showOnlineStatus:   boolean("show_online_status").notNull().default(true),
+  activityVisibility: text("activity_visibility").notNull().default("private"),
+  updatedAt:          timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Notification Preferences ─────────────────────────────────────────────────
+ 
+export const userNotificationPrefs = pgTable("user_notification_prefs", {
+  userId:              text("user_id").primaryKey(),
+  // In-app
+  inAppNewSubscriber:  boolean("in_app_new_subscriber").notNull().default(true),
+  inAppNewMessage:     boolean("in_app_new_message").notNull().default(true),
+  inAppNewTip:         boolean("in_app_new_tip").notNull().default(true),
+  inAppNewLike:        boolean("in_app_new_like").notNull().default(true),
+  inAppNewComment:     boolean("in_app_new_comment").notNull().default(true),
+  inAppNewPost:        boolean("in_app_new_post").notNull().default(true),
+  inAppFanPass:        boolean("in_app_fan_pass").notNull().default(true),
+  inAppWallet:         boolean("in_app_wallet").notNull().default(true),
+  inAppSystem:         boolean("in_app_system").notNull().default(true),
+  // Email
+  emailNewSubscriber:  boolean("email_new_subscriber").notNull().default(true),
+  emailNewMessage:     boolean("email_new_message").notNull().default(false),
+  emailNewTip:         boolean("email_new_tip").notNull().default(true),
+  emailMarketing:      boolean("email_marketing").notNull().default(false),
+  emailWeeklyDigest:   boolean("email_weekly_digest").notNull().default(true),
+  emailSecurityAlerts: boolean("email_security_alerts").notNull().default(true),
+  // Push
+  pushEnabled:         boolean("push_enabled").notNull().default(false),
+  pushNewMessage:      boolean("push_new_message").notNull().default(true),
+  pushNewSubscriber:   boolean("push_new_subscriber").notNull().default(true),
+  pushNewTip:          boolean("push_new_tip").notNull().default(true),
+  pushFanPass:         boolean("push_fan_pass").notNull().default(false),
+  updatedAt:           timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Appearance Settings ──────────────────────────────────────────────────────
+ 
+export const userAppearanceSettings = pgTable("user_appearance_settings", {
+  userId:             text("user_id").primaryKey(),
+  theme:              themeModeEnum("theme").notNull().default("dark"),
+  accentColor:        accentColorEnum("accent_color").notNull().default("purple"),
+  fontSize:           fontSizeEnum("font_size").notNull().default("medium"),
+  contentLayout:      contentLayoutEnum("content_layout").notNull().default("grid"),
+  reduceMotion:       boolean("reduce_motion").notNull().default(false),
+  compactMode:        boolean("compact_mode").notNull().default(false),
+  showExplicitContent: boolean("show_explicit_content").notNull().default(false),
+  updatedAt:          timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+// ─── Active Sessions ──────────────────────────────────────────────────────────
+ 
+export const userActiveSessions = pgTable("user_active_sessions", {
+  id:         text("id").primaryKey(),
+  userId:     text("user_id").notNull(),
+  device:     text("device").notNull().default("Unknown"),
+  browser:    text("browser").notNull().default("Unknown"),
+  location:   text("location").notNull().default("Unknown"),
+  ipAddress:  text("ip_address").notNull().default(""),
+  lastActive: timestamp("last_active").defaultNow().notNull(),
+  isCurrent:  boolean("is_current").notNull().default(false),
+  createdAt:  timestamp("created_at").defaultNow().notNull(),
+});
+ 
+// ─── Types ────────────────────────────────────────────────────────────────────
+ 
+export type UserProfileSettingsRow   = typeof userProfileSettings.$inferSelect;
+export type UserPrivacySettingsRow   = typeof userPrivacySettings.$inferSelect;
+export type UserNotificationPrefsRow = typeof userNotificationPrefs.$inferSelect;
+export type UserAppearanceSettingsRow = typeof userAppearanceSettings.$inferSelect;
+export type UserActiveSessionRow     = typeof userActiveSessions.$inferSelect;
+ 
+
+
+export const applicationStatusEnum = pgEnum("application_status", [
+  "draft",
+  "submitted",
+  "under_review",
+  "approved",
+  "rejected",
+  "more_info_required",
+]);
+ 
+export const idDocumentTypeEnum = pgEnum("id_document_type", [
+  "passport",
+  "drivers_license",
+  "national_id",
+  "residence_permit",
+]);
+ 
+export const creatorApplication = pgTable("creator_applications", {
+  id:              text("id").primaryKey(),
+  userId:          text("user_id").notNull().unique(),
+  status:          applicationStatusEnum("status").notNull().default("draft"),
+  currentStep:     integer("current_step").notNull().default(1),
+ 
+  // Step 1: Personal
+  legalFirstName:  text("legal_first_name").notNull().default(""),
+  legalLastName:   text("legal_last_name").notNull().default(""),
+  dateOfBirth:     text("date_of_birth").notNull().default(""),
+  country:         text("country").notNull().default(""),
+  city:            text("city").notNull().default(""),
+  address:         text("address").notNull().default(""),
+  postalCode:      text("postal_code").notNull().default(""),
+ 
+  // Step 2: Identity
+  documentType:    idDocumentTypeEnum("document_type"),
+  documentNumber:  text("document_number").notNull().default(""),
+  documentExpiry:  text("document_expiry").notNull().default(""),
+  documentFrontUrl: text("document_front_url"),
+  documentBackUrl:  text("document_back_url"),
+  selfieWithIdUrl:  text("selfie_with_id_url"),
+  selfieUrl:        text("selfie_url"),
+ 
+  // Step 3: Profile
+  displayName:     text("display_name").notNull().default(""),
+  username:        text("username").notNull().default(""),
+  bio:             text("bio").notNull().default(""),
+  categories:      text("categories").notNull().default("[]"),    // JSON array
+  socialLinks:     text("social_links").notNull().default("{}"),  // JSON object
+  subscriptionPrice: integer("subscription_price").notNull().default(499),
+  hasPreviousExperience: boolean("has_previous_experience").notNull().default(false),
+  previousPlatforms: text("previous_platforms").notNull().default(""),
+  contentDescription: text("content_description").notNull().default(""),
+ 
+  // Step 4: Payout
+  payoutMethod:    text("payout_method").notNull().default("bank"),
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankRoutingNumber: text("bank_routing_number"),
+  bankName:        text("bank_name"),
+  bankCountry:     text("bank_country"),
+  cryptoWalletAddress: text("crypto_wallet_address"),
+  cryptoCurrency:  text("crypto_currency"),
+  taxCountry:      text("tax_country").notNull().default(""),
+  taxId:           text("tax_id").notNull().default(""),
+  isBusinessAccount: boolean("is_business_account").notNull().default(false),
+  businessName:    text("business_name"),
+ 
+  // Step 5: Agreements
+  agreedToTerms:         boolean("agreed_to_terms").notNull().default(false),
+  agreedToContentPolicy: boolean("agreed_to_content_policy").notNull().default(false),
+  agreedToAge18:         boolean("agreed_to_age18").notNull().default(false),
+  agreedToTaxObligations: boolean("agreed_to_tax_obligations").notNull().default(false),
+  agreedToPrivacyPolicy: boolean("agreed_to_privacy_policy").notNull().default(false),
+  signature:             text("signature").notNull().default(""),
+ 
+  // Meta
+  submittedAt:     timestamp("submitted_at"),
+  reviewedAt:      timestamp("reviewed_at"),
+  rejectionReason: text("rejection_reason"),
+  reviewedBy:      text("reviewed_by"),
+  createdAt:       timestamp("created_at").defaultNow().notNull(),
+  updatedAt:       timestamp("updated_at").defaultNow().notNull(),
+});
+ 
+export type CreatorApplicationRow = typeof creatorApplication.$inferSelect;
+ 
+
+export const seasonStatusEnum = pgEnum("season_status", [
+  "draft",
+  "active",
+  "ended",
+]);
+ 
+export const rewardTrackTierEnum = pgEnum("reward_track_tier", [
+  "free",
+  "vip",
+]);
+ 
+export const rewardItemTypeEnum = pgEnum("reward_item_type", [
+  "coins",
+  "xp",
+  "badge",
+  "booster_xp",
+  "booster_coin",
+  "streak_freeze",
+  "mystery_box",
+  "exclusive_content",
+  "emote",
+  "vip_pass",
+]);
+ 
+export const itemRarityEnum = pgEnum("item_rarity", [
+  "common",
+  "rare",
+  "epic",
+  "legendary",
+]);
+ 
+// ─── Fan Pass Seasons ─────────────────────────────────────────────────────────
+ 
+export const fanPassSeasons = pgTable("fan_pass_seasons", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  status: seasonStatusEnum("status").notNull().default("draft"),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date").notNull(),
+  vipPriceCents: integer("vip_price_cents").notNull().default(999),
+  vipPriceCoins: integer("vip_price_coins").notNull().default(5000),
+  maxLevel: integer("max_level").notNull().default(100),
+  xpPerLevel: integer("xp_per_level").notNull().default(200),
+  // Agency / creator ownership
+  creatorId: text("creator_id"),   // null = platform-wide
+  agencyId: text("agency_id"),     // null = not agency-owned
+  // Cached stats (updated via cron/background job)
+  totalParticipants: integer("total_participants").notNull().default(0),
+  totalVipSubscribers: integer("total_vip_subscribers").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  featuredCreatorId:   text("featured_creator_id"),
+featuredCreatorName: text("featured_creator_name"),
+});
+ 
+// ─── Pass Reward Track ────────────────────────────────────────────────────────
+// Each row = one reward card in the battle-pass-style track
+ 
+export const passRewardTrack = pgTable(
+  "pass_reward_track",
+  {
+    id: serial("id").primaryKey(),
+    seasonId: integer("season_id").notNull(),
+    level: integer("level").notNull(),
+    tier: rewardTrackTierEnum("tier").notNull(),          // "free" | "vip"
+    icon: text("icon").notNull(),
+    label: text("label").notNull(),
+    description: text("description").notNull().default(""),
+    rewardType: rewardItemTypeEnum("reward_type").notNull(),
+    rewardAmount: integer("reward_amount").notNull().default(1),
+    isVipOnly: boolean("is_vip_only").notNull().default(false),
+    rarity: itemRarityEnum("rarity").notNull().default("common"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    rewardMeta: text("reward_meta"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    seasonLevelTierIdx: uniqueIndex("season_level_tier_idx").on(
+      t.seasonId,
+      t.level,
+      t.tier
+    ),
+  })
+);
+ 
+// ─── User Reward Claims (reward track claims, separate from login bonus) ──────
+ 
+export const userPassRewardClaims = pgTable(
+  "user_pass_reward_claims",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    rewardId: integer("reward_id").notNull(),
+    seasonId: integer("season_id").notNull(),
+    claimedAt: timestamp("claimed_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    userRewardIdx: uniqueIndex("user_reward_idx").on(t.userId, t.rewardId),
+  })
+);
+ 
+// ─── Types ────────────────────────────────────────────────────────────────────
+ 
+export type FanPassSeason      = typeof fanPassSeasons.$inferSelect;
+export type PassRewardTrackRow = typeof passRewardTrack.$inferSelect;
+export type UserPassRewardClaim = typeof userPassRewardClaims.$inferSelect;
+ 
+
+/**
+ * Add these tables to your existing db/schema.ts
+ * Run: npx drizzle-kit push
+ */
+
+
+// ── Task type enum ─────────────────────────────────────────────────────────────
+
+export const taskTypeEnum = pgEnum("task_type", ["weekly", "streak"]);
+export const passTierEnum = pgEnum("pass_tier", ["free", "premium"]);
+
+// ── Season Tasks (agency configures these) ────────────────────────────────────
+
+export const seasonTasks = pgTable("season_tasks", {
+  id:          serial("id").primaryKey(),
+  seasonId:    integer("season_id").notNull(),
+  title:       text("title").notNull(),
+  description: text("description").notNull(),
+  icon:        text("icon").notNull().default("⭐"),
+  xpReward:    integer("xp_reward").notNull().default(50),
+  coinReward:  integer("coin_reward").notNull().default(0),
+  tier:        passTierEnum("tier").notNull().default("free"),  // free | premium
+  type:        taskTypeEnum("type").notNull().default("weekly"), // weekly | streak
+  isActive:    boolean("is_active").notNull().default(true),
+  sortOrder:   integer("sort_order").notNull().default(0),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+  updatedAt:   timestamp("updated_at").defaultNow().notNull(),
+}, t => ({
+  seasonIdx: index("season_tasks_season_idx").on(t.seasonId),
+  tierIdx:   index("season_tasks_tier_idx").on(t.tier),
+}));
+
+// ── Weekly Task Assignments (randomized per user per week) ────────────────────
+// One row per user per week. Stores which tasks were picked.
+
+export const userWeeklyTasks = pgTable("user_weekly_tasks", {
+  id:            serial("id").primaryKey(),
+  userId:        text("user_id").notNull(),
+  seasonId:      integer("season_id").notNull(),
+  weekStartDate: timestamp("week_start_date").notNull(),
+  weekEndDate:   timestamp("week_end_date").notNull(),
+  // The two randomly assigned task IDs (JSON array: [freeTaskId, premiumTaskId])
+  assignedTaskIds: text("assigned_task_ids").notNull().default("[]"),
+  // Completion state (JSON: { taskId: completedAt ISO | null })
+  completionState: text("completion_state").notNull().default("{}"),
+  // Streak task progress (always task 3)
+  streakProgress:  integer("streak_progress").notNull().default(0),
+  streakCompleted: boolean("streak_completed").notNull().default(false),
+  createdAt:       timestamp("created_at").defaultNow().notNull(),
+  updatedAt:       timestamp("updated_at").defaultNow().notNull(),
+}, t => ({
+  userWeekIdx: uniqueIndex("user_weekly_tasks_unique").on(t.userId, t.seasonId, t.weekStartDate),
+}));
+
+// ── User Season XP (reset when season ends) ───────────────────────────────────
+// Separate from the existing userLoginStreak — tracks per-season XP/level.
+
+export const userSeasonProgress = pgTable("user_season_progress", {
+  id:           serial("id").primaryKey(),
+  userId:       text("user_id").notNull(),
+  seasonId:     integer("season_id").notNull(),
+  level:        integer("level").notNull().default(1),
+  totalXp:      integer("total_xp").notNull().default(0),
+  isVip:        boolean("is_vip").notNull().default(false),
+  loginStreak:  integer("login_streak").notNull().default(0),
+  lastClaimedAt: timestamp("last_claimed_at"),
+  // XP snapshot at season end (preserved for leaderboard history)
+  finalXp:      integer("final_xp"),
+  finalLevel:   integer("final_level"),
+  resetAt:      timestamp("reset_at"),              // when XP was reset
+  createdAt:    timestamp("created_at").defaultNow().notNull(),
+  updatedAt:    timestamp("updated_at").defaultNow().notNull(),
+}, t => ({
+  userSeasonIdx: uniqueIndex("user_season_progress_unique").on(t.userId, t.seasonId),
+  seasonIdx:     index("user_season_progress_season_idx").on(t.seasonId),
+}));
+
+// ── Reward Claims (per user per reward) ────────────────────────────────────────
+
+export const rewardClaims = pgTable("reward_claims", {
+  id:         serial("id").primaryKey(),
+  userId:     text("user_id").notNull(),
+  seasonId:   integer("season_id").notNull(),
+  rewardId:   integer("reward_id").notNull(),
+  claimedAt:  timestamp("claimed_at").defaultNow().notNull(),
+}, t => ({
+  userRewardUnique: uniqueIndex("reward_claims_unique").on(t.userId, t.rewardId),
+}));
+
+// ── Season XP Reset Log ───────────────────────────────────────────────────────
+
+export const seasonXpResetLog = pgTable("season_xp_reset_log", {
+  id:          serial("id").primaryKey(),
+  seasonId:    integer("season_id").notNull(),
+  affectedUsers: integer("affected_users").notNull().default(0),
+  resetAt:     timestamp("reset_at").defaultNow().notNull(),
+});
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type SeasonTask          = typeof seasonTasks.$inferSelect;
+export type UserWeeklyTask      = typeof userWeeklyTasks.$inferSelect;
+export type UserSeasonProgress  = typeof userSeasonProgress.$inferSelect;
+export type RewardClaim         = typeof rewardClaims.$inferSelect;

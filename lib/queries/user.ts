@@ -498,6 +498,76 @@ export async function getCreatorProfile(creatorId: string) {
   };
 }
 
+
+export async function getCreatorMediaPosts(
+  creatorId: string,
+  currentUserId: string | null,
+  isSubscribed: boolean
+) {
+  const mediaPosts = await db.execute<{
+    id: string;
+    title: string | null;
+    description: string | null;
+    media_type: string;
+    media_url: string;
+    thumbnail_url: string | null;
+    is_locked: boolean;
+    ppv_price: string | null;
+    like_count: number;
+    view_count: number;
+    created_at: Date;
+    is_liked: boolean;
+    is_bookmarked: boolean;
+    duration: number | null; // Video duration in seconds
+  }>(sql`
+    SELECT 
+      p.id,
+      p.title,
+      p.description,
+      p.media_type,
+      p.media_url,
+      p.thumbnail_url,
+      p.is_locked,
+      p.ppv_price,
+      p.like_count,
+      p.view_count,
+      p.created_at,
+      p.duration,
+      ${currentUserId ? sql`EXISTS(
+        SELECT 1 FROM ${likes} l 
+        WHERE l.post_id = p.id AND l.user_id = ${currentUserId}
+      )` : sql`false`} as is_liked,
+      ${currentUserId ? sql`EXISTS(
+        SELECT 1 FROM ${bookmarks} b 
+        WHERE b.post_id = p.id AND b.user_id = ${currentUserId}
+      )` : sql`false`} as is_bookmarked
+    FROM ${posts} p
+    WHERE p.creator_id = ${creatorId}
+      AND (
+        p.is_locked = false 
+        OR ${isSubscribed}
+      )
+    ORDER BY p.created_at DESC
+  `);
+
+  return mediaPosts.rows.map(row => ({
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    mediaType: row.media_type,
+    mediaUrl: row.media_url,
+    thumbnailUrl: row.thumbnail_url,
+    isLocked: row.is_locked,
+    ppvPrice: row.ppv_price ? parseFloat(row.ppv_price) : null,
+    likeCount: row.like_count,
+    viewCount: row.view_count,
+    createdAt: row.created_at,
+    isLiked: row.is_liked,
+    isBookmarked: row.is_bookmarked,
+    duration: row.duration,
+  }));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MESSAGES
 // ═══════════════════════════════════════════════════════════════════════════════

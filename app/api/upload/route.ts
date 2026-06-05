@@ -6,7 +6,22 @@ import { BlobServiceClient } from "@azure/storage-blob";
 const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
 
 if (!connectionString) {
-  console.error("⚠️  AZURE_STORAGE_CONNECTION_STRING is not set");
+  console.error("⚠️ AZURE_STORAGE_CONNECTION_STRING is not set");
+}
+
+async function uploadBufferToAzure(
+  buffer: Buffer,
+  filename: string,
+  contentType: string,
+  container: string
+): Promise<string> {
+  const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString!);
+  const containerClient   = blobServiceClient.getContainerClient(container);
+  const blockBlobClient   = containerClient.getBlockBlobClient(filename);
+  await blockBlobClient.uploadData(buffer, {
+    blobHTTPHeaders: { blobContentType: contentType },
+  });
+  return blockBlobClient.url;
 }
 
 export async function POST(req: NextRequest) {
@@ -15,74 +30,54 @@ export async function POST(req: NextRequest) {
 
   try {
     if (!connectionString) {
-      return NextResponse.json(
-        { error: "Azure Storage not configured" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Azure Storage not configured" }, { status: 500 });
     }
 
     const formData = await req.formData();
-    const file = formData.get("file") as File;
-    const type = formData.get("type") as string; // 'image' or 'video'
+    const file     = formData.get("file") as File;
+    const type     = formData.get("type") as string; // "image" or "video"
+    const duration = formData.get("duration") as string | null;
+    const thumb    = formData.get("thumbnail") as File | null;
 
     if (!file) {
-      return NextResponse.json(
-        { error: "No file provided" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    console.log(`[Upload] Uploading ${type} file: ${file.name} (${file.size} bytes)`);
+    console.log(`[Upload] Uploading ${type}: ${file.name} (${file.size} bytes)`);
 
-    // Create unique filename
-    const timestamp = Date.now();
-    const randomString = Math.random().toString(36).substring(7);
+    const timestamp     = Date.now();
+    const randomString  = Math.random().toString(36).substring(7);
     const fileExtension = file.name.split(".").pop();
-    const filename = `${timestamp}-${randomString}.${fileExtension}`;
+    const filename      = `${timestamp}-${randomString}.${fileExtension}`;
 
-    // ✅ USE EXISTING CONTAINERS
-    // Images go to 'post' container (same as regular posts)
-    // Videos also go to 'post' container
-    const containerName = "posts";
-
-    // Initialize Azure Blob Service
-    const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
-    const containerClient = blobServiceClient.getContainerClient(containerName);
-
-    // Get blob client
-    const blockBlobClient = containerClient.getBlockBlobClient(filename);
-
-    // Convert file to buffer
-    const bytes = await file.arrayBuffer();
+    const bytes  = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Upload to Azure with content type
-    await blockBlobClient.uploadData(buffer, {
-      blobHTTPHeaders: {
-        blobContentType: file.type,
-      },
-    });
+    // Upload main file
+    const url = await uploadBufferToAzure(buffer, filename, file.type, "posts");
 
-    const url = blockBlobClient.url;
-
-    console.log(`[Upload] Successfully uploaded to: ${url}`);
-
-    // For thumbnails (if video), use 'thumbnails' container
-    let thumbnailUrl = url;
-
-    if (type === "video") {
-      // For now, use the video URL as thumbnail
-      // Later you can generate a proper thumbnail and upload to 'thumbnails' container
-      thumbnailUrl = url;
+    let thumbnailUrl: string | undefined = undefined;
+    if (thumb) {
+      const thumbBytes  = await thumb.arrayBuffer();
+      const thumbBuffer = Buffer.from(thumbBytes);
+      const thumbFilename = `${timestamp}-${randomString}-thumb.jpg`;
+      thumbnailUrl = await uploadBufferToAzure(
+        thumbBuffer,
+        thumbFilename,
+        "image/jpeg",
+        "thumbnails"
+      );
     }
 
     return NextResponse.json({
       url,
-      thumbnailUrl,
+      thumbnailUrl: thumbnailUrl ?? url,
       filename,
       type,
       size: file.size,
+      duration: duration ? Number(duration) : null,
     });
+
   } catch (err) {
     console.error("[Upload] Error:", err);
     return NextResponse.json(
@@ -91,4 +86,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

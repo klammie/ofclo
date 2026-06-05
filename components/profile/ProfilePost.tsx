@@ -69,7 +69,7 @@ export function ProfilePost({ post, creator, isSubscribed, currentUserId }) {
             )}
           </div>
         ) : post.mediaType === "video" ? (
-          <video src={post.mediaUrl} poster={post.thumbnailUrl || undefined} controls className="w-full h-full object-cover" />
+          <video src={post.mediaUrl} poster={post.thumbnailUrl || undefined} controls controlsList="nodownload" onContextMenu={(e) => e.preventDefault()} className="w-full h-full object-cover" />
         ) : (
           <Image src={post.mediaUrl} alt={post.title || "Post"} fill className="object-cover" />
         )}

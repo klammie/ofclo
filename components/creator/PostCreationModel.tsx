@@ -18,7 +18,7 @@ export function PostCreationModal({ creatorId, onClose }: PostCreationModalProps
   // Form state
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [contentType, setContentType] = useState<"image" | "video">("image");
+  const [mediaType, setMediaType] = useState<"image" | "video">("image");
   const [isLocked, setIsLocked] = useState(false);
   const [ppvPrice, setPpvPrice] = useState("");
 
@@ -28,7 +28,7 @@ export function PostCreationModal({ creatorId, onClose }: PostCreationModalProps
 
   function handleUploadComplete(result: UploadResult) {
     setUploadedMedia(result);
-    setContentType(result.type);
+    setMediaType(result.type);
     setError(null);
   }
 
@@ -72,9 +72,10 @@ export function PostCreationModal({ creatorId, onClose }: PostCreationModalProps
           creatorId,
           title,
           description,
-          contentType,
+          mediaType,
           mediaUrl: uploadedMedia.url,
           thumbnailUrl: uploadedMedia.thumbnailUrl,
+          duration: uploadedMedia.duration,
           isLocked,
           ppvPrice: isLocked && ppvPrice ? parseFloat(ppvPrice) : null,
         }),
@@ -122,13 +123,21 @@ export function PostCreationModal({ creatorId, onClose }: PostCreationModalProps
               disabled={isPending}
             />
           ) : (
-            <MediaPreview
-              url={uploadedMedia.url}
-              type={uploadedMedia.type}
-              thumbnailUrl={uploadedMedia.thumbnailUrl}
-              onDelete={handleDeleteMedia}
-              className="w-full max-h-96"
-            />
+            <>
+  <MediaPreview
+    url={uploadedMedia.url}
+    type={uploadedMedia.type}
+    thumbnailUrl={uploadedMedia.thumbnailUrl}
+    onDelete={handleDeleteMedia}
+    className="w-full max-h-96"
+  />
+  {uploadedMedia.type === "video" && uploadedMedia.duration && (
+    <p className="text-gray-400 text-sm mt-2">
+      ⏱ Duration: {Math.round(uploadedMedia.duration)} seconds
+    </p>
+  )}
+</>
+
           )}
 
           {/* Title */}

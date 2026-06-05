@@ -2,10 +2,12 @@
 // Server-only helpers for protecting pages and API routes.
 // Drop-in replacement for the old NextAuth requireRole().
 
-import { headers }   from "next/headers";
-import { redirect }  from "next/navigation";
-import { auth }      from "./index";
-import type { SessionUser } from "./index";
+import { auth } from "@/lib/auth";
+import { headers, cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { db } from "@/db";
+import { user } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 // ── getSession ────────────────────────────────────────────────────────────────
 // Use in Server Components and Route Handlers.
@@ -36,14 +38,87 @@ export async function requireAuth() {
 //   const { user } = await requireRole("admin");
 //   const { user } = await requireRole("admin", "agency");
 
-export async function requireRole(
-  ...roles: Array<"admin" | "agency" | "creator" | "user">
-) {
-  const data = await requireAuth();
-  if (!roles.includes(data.user.role as typeof roles[number])) {
+export async function requireRole(...allowedRoles: Role[]) {
+  console.log("[Auth Guard] Checking roles:", allowedRoles);
+  
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+
+  if (!session) {
+    console.log("[Auth Guard] No session found, redirecting to login");
+    redirect("/login");
+  }
+
+  console.log("[Auth Guard] Session found:", {
+    userId: session.user.id,
+    role: session.user.role,
+    email: session.user.email,
+  });
+
+  // Check for impersonation cookies
+  const cookieStore = await cookies();
+  const impersonatingUserId = cookieStore.get("impersonating_user_id")?.value;
+  const originalUserId = cookieStore.get("original_user_id")?.value;
+
+  let effectiveUser = session.user;
+  let isImpersonating = false;
+
+  // If impersonating, get the impersonated user's data
+  if (impersonatingUserId && originalUserId) {
+    console.log("[Auth Guard] Impersonation detected:", {
+      impersonatingUserId,
+      originalUserId,
+    });
+
+    const [impersonatedUser] = await db
+      .select()
+      .from(user)
+      .where(eq(user.id, impersonatingUserId))
+      .limit(1);
+
+    if (impersonatedUser) {
+      effectiveUser = {
+        id: impersonatedUser.id,
+        name: impersonatedUser.name,
+        email: impersonatedUser.email,
+        role: impersonatedUser.role,
+        emailVerified: impersonatedUser.emailVerified,
+        image: impersonatedUser.image,
+        createdAt: impersonatedUser.createdAt,
+        updatedAt: impersonatedUser.updatedAt,
+      };
+      isImpersonating = true;
+      console.log("[Auth Guard] Using impersonated user:", {
+        userId: effectiveUser.id,
+        role: effectiveUser.role,
+      });
+    } else {
+      console.log("[Auth Guard] Impersonated user not found, clearing cookies");
+      // Clear invalid impersonation cookies
+      cookieStore.delete("impersonating_user_id");
+      cookieStore.delete("original_user_id");
+    }
+  }
+
+  console.log("[Auth Guard] Effective user role:", effectiveUser.role);
+  console.log("[Auth Guard] Allowed roles:", allowedRoles);
+
+  // Check if user has required role
+  if (!allowedRoles.includes(effectiveUser.role as Role)) {
+    console.log("[Auth Guard] UNAUTHORIZED - User role not in allowed roles");
+    console.log("[Auth Guard] Redirecting to /unauthorized");
     redirect("/unauthorized");
   }
-  return data;
+
+  console.log("[Auth Guard] ✅ Authorization successful");
+
+  return { 
+    user: effectiveUser, 
+    session,
+    isImpersonating,
+    originalUserId: isImpersonating ? originalUserId : null,
+  };
 }
 
 // ── requirePermission ────────────────────────────────────────────────────────
@@ -96,32 +171,28 @@ export async function getSessionForApiRoute(req: Request) {
 
 type Role = "admin" | "agency" | "creator" | "user";
 
-export async function assertRole(
-  req: Request,
-  ...roles: Role[]
-): Promise<
-  | { session: Awaited<ReturnType<typeof auth.api.getSession>>; error: null }
-  | { session: null; error: Response }
-> {
-  const session = await getSessionForApiRoute(req);
+export async function assertRole(req: Request, ...allowedRoles: Role[]) {
+  const session = await auth.api.getSession({
+    headers: req.headers,
+  });
 
   if (!session) {
     return {
       session: null,
-      error: new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        { status: 401, headers: { "Content-Type": "application/json" } }
-      ),
+      error: new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
     };
   }
 
-  if (!roles.includes(session.user.role as Role)) {
+  if (!allowedRoles.includes(session.user.role as Role)) {
     return {
       session: null,
-      error: new Response(
-        JSON.stringify({ error: "Forbidden — insufficient role" }),
-        { status: 403, headers: { "Content-Type": "application/json" } }
-      ),
+      error: new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }),
     };
   }
 

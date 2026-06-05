@@ -35,7 +35,7 @@ export async function getCreatorStats(creatorId: string): Promise<StatItem[]> {
         COALESCE(
           (SELECT SUM(amount) FROM ${tips}
            WHERE ${tips.toCreatorId} = ${creatorId}
-             AND ${tips.paymentStatus} = 'completed'
+             AND ${tips.status} = 'completed'
              AND ${tips.createdAt} >= ${monthStart}),
           0
         ) +
@@ -77,7 +77,7 @@ export async function getCreatorStats(creatorId: string): Promise<StatItem[]> {
       .from(posts)
       .where(and(
         eq(posts.creatorId, creatorId),
-        eq(posts.isPublished, true)
+        eq(posts.isLocked, true)
       )),
 
     // Total profile views (sum of all post views)
@@ -135,7 +135,7 @@ export async function getCreatorPosts(
 
   const conditions: SQL[] = [eq(posts.creatorId, creatorId)];
   if (filters?.isPublished !== undefined) {
-    conditions.push(eq(posts.isPublished, filters.isPublished));
+    conditions.push(eq(posts.isLocked, filters.isPublished));
   }
   if (filters?.isLocked !== undefined) {
     conditions.push(eq(posts.isLocked, filters.isLocked));
@@ -311,7 +311,7 @@ export async function getRecentTips(
     .leftJoin(profiles, eq(user.id, profiles.id))
     .where(and(
       eq(tips.toCreatorId, creatorId),
-      eq(tips.paymentStatus, "completed")
+      eq(tips.status, "completed")
     ))
     .orderBy(desc(tips.createdAt))
     .limit(limit);
@@ -363,7 +363,7 @@ export async function getCreatorEarningsBreakdown(
       .from(tips)
       .where(and(
         eq(tips.toCreatorId, creatorId),
-        eq(tips.paymentStatus, "completed")
+        eq(tips.status, "completed")
       )),
   ]);
 
@@ -404,7 +404,7 @@ export async function getCreatorEarningsChart(creatorId: string) {
         SUM(amount)::text as total
       FROM ${tips}
       WHERE ${tips.toCreatorId} = ${creatorId}
-        AND ${tips.paymentStatus} = 'completed'
+        AND ${tips.status} = 'completed'
         AND ${tips.createdAt} >= NOW() - INTERVAL '12 months'
       GROUP BY 1
       

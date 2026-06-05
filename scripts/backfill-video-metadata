@@ -1,0 +1,137 @@
+// scripts/backfill-video-metadata.ts
+//
+// Run once to populate duration + thumbnailUrl for existing video posts
+// that currently have NULL values.
+//
+// Usage:
+//   npx tsx scripts/backfill-video-metadata.ts
+//
+// Requires ffmpeg + ffprobe installed locally:
+//   npm install fluent-ffmpeg @ffprobe-installer/ffprobe @ffmpeg-installer/ffmpeg
+
+import { db } from "../src/db";
+import { posts } from "../src/db/schema";
+import { eq, isNull, and } from "drizzle-orm";
+import { BlobServiceClient } from "@azure/storage-blob";
+import ffmpeg from "fluent-ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { writeFile, unlink, readFile } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import { randomUUID } from "crypto";
+import * as https from "https";
+import * as http from "http";
+
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+// ─── Azure setup ──────────────────────────────────────────────────────────────
+const blobServiceClient = BlobServiceClient.fromConnectionString(
+  process.env.AZURE_STORAGE_CONNECTION_STRING!
+);
+const containerName = process.env.AZURE_STORAGE_CONTAINER ?? "fanzluv-media";
+
+async function uploadToAzure(buffer: Buffer, filename: string, contentType: string): Promise<string> {
+  const containerClient = blobServiceClient.getContainerClient(containerName);
+  const blockBlobClient = containerClient.getBlockBlobClient(filename);
+  await blockBlobClient.uploadData(buffer, {
+    blobHTTPHeaders: { blobContentType: contentType },
+  });
+  return blockBlobClient.url;
+}
+
+// ─── Download a URL to a local tmp file ──────────────────────────────────────
+function downloadToFile(url: string, destPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith("https") ? https : http;
+    const file     = require("fs").createWriteStream(destPath);
+    protocol.get(url, (res) => {
+      res.pipe(file);
+      file.on("finish", () => { file.close(); resolve(); });
+    }).on("error", (e) => { unlink(destPath).catch(() => null); reject(e); });
+  });
+}
+
+// ─── Video helpers (same as upload route) ────────────────────────────────────
+function getVideoDuration(filePath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) return reject(err);
+      resolve(Math.round(metadata?.format?.duration ?? 0));
+    });
+  });
+}
+
+function extractThumbnail(filePath: string, durationSeconds: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const thumbPath = join(tmpdir(), `thumb-${randomUUID()}.jpg`);
+    const seekTime  = Math.min(1, durationSeconds * 0.1);
+    ffmpeg(filePath)
+      .screenshots({ timestamps: [seekTime], filename: thumbPath, size: "640x?", folder: "/" })
+      .on("end", async () => {
+        try {
+          const buf = await readFile(thumbPath);
+          await unlink(thumbPath).catch(() => null);
+          resolve(buf);
+        } catch (e) { reject(e); }
+      })
+      .on("error", reject);
+  });
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+async function main() {
+  // Find all video posts missing duration OR thumbnail
+  const videoPosts = await db
+    .select({ id: posts.id, mediaUrl: posts.mediaUrl })
+    .from(posts)
+    .where(
+      and(
+        eq(posts.mediaType, "video"),
+        isNull(posts.duration),
+      )
+    );
+
+  console.log(`Found ${videoPosts.length} video posts to backfill`);
+
+  let success = 0;
+  let failed  = 0;
+
+  for (const post of videoPosts) {
+    const tmpPath = join(tmpdir(), `backfill-${randomUUID()}.mp4`);
+    try {
+      console.log(`Processing post ${post.id}...`);
+
+      // Download the video from Azure
+      await downloadToFile(post.mediaUrl, tmpPath);
+
+      // Get duration
+      const duration = await getVideoDuration(tmpPath);
+
+      // Generate thumbnail
+      const thumbBuffer = await extractThumbnail(tmpPath, duration);
+      const thumbKey    = `thumbnails/backfill/${post.id}.jpg`;
+      const thumbUrl    = await uploadToAzure(thumbBuffer, thumbKey, "image/jpeg");
+
+      // Update DB
+      await db
+        .update(posts)
+        .set({ duration, thumbnailUrl: thumbUrl })
+        .where(eq(posts.id, post.id));
+
+      console.log(`  ✓ duration=${duration}s thumbnail=${thumbUrl}`);
+      success++;
+    } catch (e: any) {
+      console.error(`  ✗ Failed: ${e?.message}`);
+      failed++;
+    } finally {
+      await unlink(tmpPath).catch(() => null);
+    }
+  }
+
+  console.log(`\nDone. ${success} updated, ${failed} failed.`);
+  process.exit(0);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
