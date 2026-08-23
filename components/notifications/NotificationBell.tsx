@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useNotifications } from "@/lib/hooks/use-notifications";
 import type { Notification, NotificationType } from "@/lib/types";
+import { useAppCounts, invalidateCounts } from "@/lib/hooks/useAppCounts";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const P    = "#ef3976";
@@ -179,6 +180,16 @@ function NotificationPanel({
       ? notifications.filter((n) => !n.isRead)
       : notifications;
 
+  const handleMarkAllRead = useCallback(async () => {
+    await markAllRead();
+    invalidateCounts(); // bust cache so bell badge clears immediately
+  }, [markAllRead]);
+
+  const handleMarkRead = useCallback(async (id: string) => {
+    await markRead(id);
+    invalidateCounts();
+  }, [markRead]);
+
   const handleNavigate = useCallback(
     (url?: string) => {
       if (url) {
@@ -189,16 +200,8 @@ function NotificationPanel({
     [router, onClose]
   );
 
-  return (
-    <div
-      className="absolute right-0 top-full mt-2 w-[380px] rounded-[20px] border overflow-hidden z-50 flex flex-col"
-      style={{
-        background: CARD,
-        borderColor: BORDER,
-        boxShadow: "0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(124,58,237,0.1)",
-        maxHeight: "520px",
-      }}
-    >
+  const panelContent = (
+    <>
       {/* Header */}
       <div
         className="flex items-center justify-between px-4 py-3.5 border-b flex-shrink-0"
@@ -219,7 +222,7 @@ function NotificationPanel({
         <div className="flex items-center gap-2">
           {unreadCount > 0 && (
             <button
-              onClick={markAllRead}
+              onClick={handleMarkAllRead}
               className="text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all"
               style={{
                 background: "rgba(124,58,237,0.08)",
@@ -288,7 +291,7 @@ function NotificationPanel({
               <NotificationRow
                 key={notif.id}
                 notif={notif}
-                onRead={markRead}
+                onRead={handleMarkRead}
                 onNavigate={handleNavigate}
               />
             ))}
@@ -321,7 +324,37 @@ function NotificationPanel({
           Notifications auto-refresh every 30s
         </p>
       </div>
-    </div>
+    </>
+  );
+
+  return (
+    <>
+      {/* ── Mobile: fixed, centered on screen ── */}
+      <div
+        className="sm:hidden fixed inset-x-4 top-16 z-[60] rounded-[20px] border overflow-hidden flex flex-col"
+        style={{
+          background:  CARD,
+          borderColor: BORDER,
+          boxShadow:   "0 20px 60px rgba(0,0,0,0.6)",
+          maxHeight:   "calc(100dvh - 5rem)",
+        }}
+      >
+        {panelContent}
+      </div>
+
+      {/* ── Desktop: dropdown anchored to bell ── */}
+      <div
+        className="hidden sm:flex absolute right-0 top-full mt-2 w-[380px] rounded-[20px] border overflow-hidden z-50 flex-col"
+        style={{
+          background:  CARD,
+          borderColor: BORDER,
+          boxShadow:   "0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(124,58,237,0.1)",
+          maxHeight:   "520px",
+        }}
+      >
+        {panelContent}
+      </div>
+    </>
   );
 }
 
@@ -329,8 +362,7 @@ function NotificationPanel({
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const { unreadCount } = useNotifications();
-
+  const { notifications: liveUnreadCount, refresh } = useAppCounts();
   // Close on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -378,12 +410,12 @@ export function NotificationBell() {
         </svg>
 
         {/* Unread badge */}
-        {unreadCount > 0 && (
+        {liveUnreadCount > 0 && (
           <span
             className="absolute -top-1 -right-1 min-w-[16px] h-4 rounded-full flex items-center justify-center text-[9px] font-black text-white px-1"
             style={{ background: GRAD, boxShadow: "0 0 0 2px #101024" }}
           >
-            {unreadCount > 99 ? "99+" : unreadCount}
+            {liveUnreadCount > 99 ? "99+" : liveUnreadCount}
           </span>
         )}
       </button>

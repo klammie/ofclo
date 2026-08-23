@@ -1,8 +1,10 @@
+//ofclo/app/shop/purchase/route
+
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { purchaseWithCoins } from "@/lib/shop.service";
-import type { ApiPurchaseError } from "@/types/shop";
+import type { ApiPurchaseError } from "@/lib/types";
 
 const ERROR_STATUS: Record<string, number> = {
   INSUFFICIENT_COINS: 402,

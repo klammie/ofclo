@@ -6,8 +6,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { db } from "@/db";
-import { subscriptions, messages, creators, profiles, user } from "@/db/schema";
-import { and, eq, count, sql } from "drizzle-orm";
+import { subscriptions, conversations, creators, profiles, user } from "@/db/schema";
+import { and, eq, or, sql } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -18,23 +18,23 @@ export async function GET(req: NextRequest) {
   if (!subscriptionId)   return NextResponse.json({ error: "subscriptionId required" }, { status: 400 });
 
   try {
-    // Fetch sub with creator info
+    // Fetch sub with creator info — using YOUR actual schema column names
     const [row] = await db
       .select({
-        subId:           subscriptions.id,
-        status:          subscriptions.status,
-        tier:            subscriptions.tier,
-        nextBillingDate: subscriptions.nextBillingDate,
-        cancelledAt:     subscriptions.cancelledAt,
-        createdAt:       subscriptions.createdAt,
-        creatorId:       subscriptions.creatorId,
+        subId:               subscriptions.id,
+        status:              subscriptions.status,
+        tier:                subscriptions.tier,
+        priceAtSubscription: subscriptions.priceAtSubscription,
+        currentPeriodStart:  subscriptions.currentPeriodStart,
+        currentPeriodEnd:    subscriptions.currentPeriodEnd,
+        cancelledAt:         subscriptions.cancelledAt,
+        createdAt:           subscriptions.createdAt,
+        creatorId:           subscriptions.creatorId,
         // Creator info
-        creatorUserId:   creators.userId,
-        creatorName:     user.name,
-        username:        profiles.username,
-        avatarUrl:       profiles.avatarUrl,
-        standardPrice:   creators.standardPrice,
-        vipPrice:        creators.vipPrice,
+        creatorUserId:       creators.userId,
+        creatorName:         user.name,
+        username:            profiles.username,
+        avatarUrl:           profiles.avatarUrl,
       })
       .from(subscriptions)
       .innerJoin(creators,  eq(creators.id,      subscriptions.creatorId))
@@ -50,36 +50,48 @@ export async function GET(req: NextRequest) {
 
     if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    // Live unread message count — messages from creator to user, unread
+    // Use the same conversation counter as the subscription card.
     const [unreadResult] = await db
-      .select({ count: count() })
-      .from(messages)
+      .select({
+        count: sql<number>`CASE
+          WHEN ${conversations.participant1Id} = ${session.user.id}
+            THEN ${conversations.unreadCountUser1}
+          ELSE ${conversations.unreadCountUser2}
+        END`,
+      })
+      .from(conversations)
       .where(
-        and(
-          eq(messages.fromUserId, row.creatorUserId),
-          eq(messages.toUserId,   session.user.id),
-          eq(messages.isRead,     false),
+        or(
+          and(
+            eq(conversations.participant1Id, session.user.id),
+            eq(conversations.participant2Id, row.creatorUserId),
+          ),
+          and(
+            eq(conversations.participant1Id, row.creatorUserId),
+            eq(conversations.participant2Id, session.user.id),
+          ),
         )
       );
 
-    const price = row.tier === "vip"
-      ? (row.vipPrice ? Number(row.vipPrice) / 100 : null)
-      : (row.standardPrice ? Number(row.standardPrice) / 100 : null);
+    // priceAtSubscription is already stored as a dollar decimal — no /100 needed
+    const price = row.priceAtSubscription != null ? Number(row.priceAtSubscription) : 0;
 
     return NextResponse.json({
-      subscriptionId:   row.subId,
-      status:           row.status,
-      tier:             row.tier,
-      nextBillingDate:  row.nextBillingDate?.toISOString() ?? null,
-      cancelledAt:      row.cancelledAt?.toISOString()     ?? null,
-      createdAt:        row.createdAt?.toISOString()        ?? null,
-      creatorId:        row.creatorId,
-      creatorUserId:    row.creatorUserId,
-      creatorName:      row.creatorName,
-      creatorUsername:  row.username ?? row.creatorName.toLowerCase().replace(/\s+/g, "_"),
-      creatorAvatarUrl: row.avatarUrl ?? null,
-      price:            price ?? 0,
-      unreadCount:      unreadResult?.count ?? 0,
+      subscriptionId:     row.subId,
+      status:             row.status,
+      tier:               row.tier,
+      // Map currentPeriodEnd → nextBillingDate for the frontend's existing field name
+      nextBillingDate:    row.currentPeriodEnd?.toISOString()   ?? null,
+      currentPeriodStart: row.currentPeriodStart?.toISOString() ?? null,
+      cancelledAt:        row.cancelledAt?.toISOString()        ?? null,
+      createdAt:          row.createdAt?.toISOString()          ?? null,
+      creatorId:          row.creatorId,
+      creatorUserId:      row.creatorUserId,
+      creatorName:        row.creatorName,
+      creatorUsername:    row.username ?? row.creatorName.toLowerCase().replace(/\s+/g, "_"),
+      creatorAvatarUrl:   row.avatarUrl ?? null,
+      price,
+      unreadCount:        unreadResult?.count ?? 0,
     });
 
   } catch (e: any) {

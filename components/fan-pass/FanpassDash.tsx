@@ -54,6 +54,8 @@ interface FansPassDashboardProps {
   initialMilestones:   LiveMilestone[];
   initialLeaderboard:  LiveLeaderboardEntry[];
   user:                DashboardUser;
+  defaultTab?: string;
+
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -66,8 +68,9 @@ export default function FansPassDashboard({
   initialMilestones,
   initialLeaderboard,
   user,
+  defaultTab
 }: FansPassDashboardProps) {
-  const [activeTab, setActiveTab] = useState<FansPassTab>("overview");
+  const [activeTab, setActiveTab] = useState(defaultTab ?? "overview");
   const [passData, setPassData]   = useState(initialPassData);
   const [rewards, setRewards]     = useState(initialRewards);
 
@@ -271,12 +274,12 @@ export default function FansPassDashboard({
 
           {activeTab === "rewards" && (
             <RewardsTab
-              rewards={rewards}          // ← live rewards from agency config
+              rewards={rewards}
               passLevel={passLevel}
               user={user}
-              seasonId={season.id}
-              onClaim={refreshPassData}
-            />
+              seasonId={season.id}              // NEW — required for claim calls
+              featuredCreator={season.featuredCreator}  // NEW — from Step 4's service update
+/>
           )}
 
           {activeTab === "quests" && (

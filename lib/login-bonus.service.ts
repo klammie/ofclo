@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { grantStatusXp } from "@/lib/status-xp.service";
 import type {
   LoginBonusData,
   ClaimResponse,
@@ -50,6 +51,13 @@ async function getOrCreateStreak(userId: string, seasonId: number) {
 
 // ─── Build the 7-day reward grid with per-slot state ─────────────────────────
 
+// VIP-only reward types — free users see these days greyed out with a lock,
+// even when "today" or already passed, since they can't claim these specific
+// reward types without upgrading.
+// Matches YOUR actual rewardTypeEnum: "xp" | "coins" | "badge" |
+// "exclusive_content" | "streak_freeze" | "mystery_box"
+const VIP_ONLY_REWARD_TYPES = ["badge", "exclusive_content", "mystery_box"];
+
 async function buildWeekRewards(
   seasonId: number,
   currentDaySlot: number,
@@ -78,6 +86,7 @@ async function buildWeekRewards(
       rewardLabel: c.rewardLabel,
       isSpecialDay: c.isSpecialDay,
       state,
+      isVipOnly: VIP_ONLY_REWARD_TYPES.includes(c.rewardType),
     };
   });
 }
@@ -248,6 +257,15 @@ export async function claimDailyReward(
   const finalAmount = baseAmount * multiplier;
   const bonusAmount = finalAmount - baseAmount;
 
+  // Block free users from claiming VIP-only reward days (badges, exclusive
+  // content, mystery boxes). They can still see the day in the UI, greyed
+  // out, as an incentive to upgrade — but the claim itself is rejected
+  // server-side. Matches YOUR actual rewardTypeEnum.
+  const VIP_ONLY_REWARD_TYPES = ["badge", "exclusive_content", "mystery_box"];
+  if (!isVip && VIP_ONLY_REWARD_TYPES.includes(rewardType)) {
+    throw new Error("VIP_ONLY_REWARD");
+  }
+
   // Update streak
   await db
     .update(userLoginStreak)
@@ -273,6 +291,12 @@ export async function claimDailyReward(
         eq(userLoginStreak.seasonId, seasonId)
       )
     );
+
+  // Feed status XP — every login claim contributes toward the user's overall
+  // Explorer/Supporter/Fanatic/Presidential tier, not just rewardType "xp" days.
+  // Use a flat baseline contribution so coin/badge/gift days still count.
+  const statusXpContribution = rewardType === "xp" ? finalAmount : Math.round(baseAmount * 0.5);
+  await grantStatusXp(userId, statusXpContribution, "login_bonus", `${seasonId}:${slotToClaim}`, `Day ${slotToClaim} login bonus claimed`);
 
   // Insert claim log
   await db.insert(loginClaimLog).values({
@@ -392,13 +416,13 @@ export async function claimDailyReward(
 
 export async function seedDefaultDayConfig(seasonId: number) {
   await db.insert(loginBonusDayConfig).values([
-    { seasonId, daySlot: 1, label: "Day 1", icon: "⚡", rewardType: "xp",          rewardAmount: 25,  rewardLabel: "+25 XP",         isSpecialDay: false },
-    { seasonId, daySlot: 2, label: "Day 2", icon: "💰", rewardType: "coins",        rewardAmount: 50,  rewardLabel: "+50 Coins",       isSpecialDay: false },
-    { seasonId, daySlot: 3, label: "Day 3", icon: "⚡", rewardType: "xp",          rewardAmount: 50,  rewardLabel: "+50 XP",         isSpecialDay: false },
-    { seasonId, daySlot: 4, label: "Day 4", icon: "🎁", rewardType: "gift",         rewardAmount: 1,   rewardLabel: "Gift Item",       isSpecialDay: false },
-    { seasonId, daySlot: 5, label: "Day 5", icon: "⚡", rewardType: "xp",          rewardAmount: 75,  rewardLabel: "+75 XP",         isSpecialDay: false },
-    { seasonId, daySlot: 6, label: "Day 6", icon: "📦", rewardType: "mystery_box",  rewardAmount: 1,   rewardLabel: "Mystery Box",     isSpecialDay: false },
-    { seasonId, daySlot: 7, label: "Day 7", icon: "🏅", rewardType: "badge",        rewardAmount: 1,   rewardLabel: "Exclusive Badge", isSpecialDay: true  },
+    { seasonId, daySlot: 1, label: "Day 1", icon: "⚡", rewardType: "xp",                rewardAmount: 25,  rewardLabel: "+25 XP",         isSpecialDay: false },
+    { seasonId, daySlot: 2, label: "Day 2", icon: "💰", rewardType: "coins",             rewardAmount: 50,  rewardLabel: "+50 Coins",       isSpecialDay: false },
+    { seasonId, daySlot: 3, label: "Day 3", icon: "⚡", rewardType: "xp",                rewardAmount: 50,  rewardLabel: "+50 XP",         isSpecialDay: false },
+    { seasonId, daySlot: 4, label: "Day 4", icon: "🌟", rewardType: "exclusive_content", rewardAmount: 1,   rewardLabel: "Exclusive Content", isSpecialDay: false },
+    { seasonId, daySlot: 5, label: "Day 5", icon: "⚡", rewardType: "xp",                rewardAmount: 75,  rewardLabel: "+75 XP",         isSpecialDay: false },
+    { seasonId, daySlot: 6, label: "Day 6", icon: "📦", rewardType: "mystery_box",       rewardAmount: 1,   rewardLabel: "Mystery Box",     isSpecialDay: false },
+    { seasonId, daySlot: 7, label: "Day 7", icon: "🏅", rewardType: "badge",             rewardAmount: 1,   rewardLabel: "Exclusive Badge", isSpecialDay: true  },
   ]);
 
   await db.insert(loginStreakMilestone).values([

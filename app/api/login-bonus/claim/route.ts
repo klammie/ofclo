@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
-import { DayReward } from "@/lib/types";
-import type { ApiError } from "@/lib/types";
 import { claimDailyReward } from "@/lib/login-bonus.service";
+import type { ApiError } from "@/lib/types";
 
 async function checkIsVip(userId: string): Promise<boolean> {
   // Same VIP check as in GET route — extract to a shared util when ready
@@ -34,6 +33,13 @@ export async function POST(req: NextRequest) {
         code: "ALREADY_CLAIMED",
       };
       return NextResponse.json(err, { status: 409 });
+    }
+    if (e.message === "VIP_ONLY_REWARD") {
+      const err: ApiError = {
+        error: "This reward is exclusive to VIP Pass members. Upgrade to claim it.",
+        code: "VIP_ONLY_REWARD" as any,
+      };
+      return NextResponse.json(err, { status: 403 });
     }
     console.error("[POST /api/login-bonus/claim]", e);
     const err: ApiError = { error: "Server error", code: "SERVER_ERROR" };

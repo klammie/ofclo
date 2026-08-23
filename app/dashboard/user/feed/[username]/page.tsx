@@ -1,77 +1,65 @@
-// app/dashboard/user/feed/[username]/page.tsx
+// app/[username]/page.tsx
 import { notFound } from "next/navigation";
-import { requireRole } from "@/lib/auth/guard";
 import { db } from "@/db";
-import { user, profiles, creators, subscriptions, posts, likes, bookmarks } from "@/db/schema";
-import { eq, sql, and } from "drizzle-orm";
+import { creators, profiles, user, subscriptions, posts } from "@/db/schema";
+import { eq, and, desc } from "drizzle-orm";
+import { getSession } from "@/lib/auth/guard";
 import { CreatorProfileDashboard } from "@/components/profile/CreatorProfileDashboard";
+import { getSuggestedCreators } from "@/lib/queries/suggested-creators";
+import { SuggestedCreatorsSidebar } from "@/components/feed/SuggestedCreatorFeed";
 
-interface FeedProfilePageProps {
+
+export default async function CreatorProfilePage({
+  params,
+}: {
   params: Promise<{ username: string }>;
-}
-
-export default async function FeedProfilePage({ params }: FeedProfilePageProps) {
-  const session      = await requireRole("user", "creator", "agency");
+}) {
   const { username } = await params;
 
-  // ── Fetch profile ─────────────────────────────────────────────────────────
-  const profileData = await db.execute<{
-    user_id: string;
-    name: string;
-    username: string;
-    bio: string | null;
-    avatar_url: string | null;
-    cover_url: string | null;
-    location: string | null;
-    website: string | null;
-    created_at: Date;
-    creator_id: string | null;
-    is_verified: boolean;
-    subscriber_count: number;
-    post_count: number;
-    standard_price: string | null;
-    vip_price: string | null;
-  }>(sql`
-    SELECT
-      u.id                                AS user_id,
-      u.name,
-      p.username,
-      p.bio,
-      p.avatar_url,
-      p.cover_url,
-      p.location,
-      p.website,
-      u.created_at,
-      c.id                                AS creator_id,
-      COALESCE(c.is_verified,      false) AS is_verified,
-      COALESCE(c.subscriber_count, 0)     AS subscriber_count,
-      COALESCE(c.post_count,       0)     AS post_count,
-      c.standard_price,
-      c.vip_price
-    FROM ${profiles} p
-    JOIN     ${user}     u ON p.id     = u.id
-    LEFT JOIN ${creators} c ON u.id    = c.user_id
-    WHERE p.username = ${username}
-    LIMIT 1
-  `);
+  // ── Look up profile by username ────────────────────────────────────────────
+  const [profileRow] = await db
+    .select()
+    .from(profiles)
+    .where(eq(profiles.username, username))
+    .limit(1);
 
-  if (profileData.rows.length === 0) notFound();
+  if (!profileRow) notFound();
 
-  const profile      = profileData.rows[0];
-  const isOwnProfile = session.user.id === profile.user_id;
+  // ── Look up user ───────────────────────────────────────────────────────────
+  const [userRow] = await db
+    .select()
+    .from(user)
+    .where(eq(user.id, profileRow.id))
+    .limit(1);
 
-  // ── Subscription check ────────────────────────────────────────────────────
-  let isSubscribed: boolean = false;
+  if (!userRow) notFound();
+
+  // ── Look up creator record ─────────────────────────────────────────────────
+  const [creatorRow] = await db
+    .select()
+    .from(creators)
+    .where(eq(creators.userId, userRow.id))
+    .limit(1);
+
+  if (!creatorRow) notFound();
+
+  // ── Session ────────────────────────────────────────────────────────────────
+  const session      = await getSession();
+  const currentUserId = session?.user?.id ?? null;
+  const isOwnProfile = currentUserId === userRow.id;
+
+  // ── Subscription status ────────────────────────────────────────────────────
+  let isSubscribed      = false;
   let subscriptionTier: "standard" | "vip" | null = null;
 
-  if (profile.creator_id) {
+  if (currentUserId && !isOwnProfile) {
     const [sub] = await db
-      .select()
+      .select({ tier: subscriptions.tier, status: subscriptions.status })
       .from(subscriptions)
       .where(
         and(
-          eq(subscriptions.userId,    session.user.id),
-          eq(subscriptions.creatorId, profile.creator_id),
+          eq(subscriptions.userId,    currentUserId),
+          eq(subscriptions.creatorId, creatorRow.id),
           eq(subscriptions.status,    "active"),
         )
       )
@@ -83,125 +71,114 @@ export default async function FeedProfilePage({ params }: FeedProfilePageProps) 
     }
   }
 
-  // ── Posts ─────────────────────────────────────────────────────────────────
-  let formattedPosts: {
-    id: string;
-    title: string | null;
-    description: string | null;
-    mediaType: string;
-    mediaUrl: string;
-    thumbnailUrl: string | null;
-    duration: number | null;          // ← video duration in seconds
-    isLocked: boolean;
-    ppvPrice: number | null;
-    likeCount: number;
-    commentCount: number;
-    viewCount: number;
-    createdAt: Date;
-    isLiked: boolean;
-    isBookmarked: boolean;
-  }[] = [];
+  // ── Posts ──────────────────────────────────────────────────────────────────
+  const postRows = await db
+    .select()
+    .from(posts)
+    .where(
+      and(
+        eq(posts.creatorId, creatorRow.id),
+        eq(posts.status,    "published"),
+      )
+    )
+    .orderBy(desc(posts.createdAt))
+    .limit(30);
 
-  if (profile.creator_id) {
-    const postsData = await db.execute<{
-      id: string;
-      title: string | null;
-      description: string | null;
-      media_type: string;
-      media_url: string;
-      thumbnail_url: string | null;
-      duration: number | null;        // ← added
-      is_locked: boolean;
-      ppv_price: string | null;
-      like_count: number | null;
-      comment_count: number | null;
-      view_count: number | null;
-      created_at: Date;
-      is_liked: boolean;
-      is_bookmarked: boolean;
-    }>(sql`
-      SELECT
-        p.id,
-        p.title,
-        p.description,
-        p.media_type,
-        p.media_url,
-        p.thumbnail_url,
-        p.duration,                                       -- ← added
-        p.is_locked,
-        p.ppv_price,
-        COALESCE(p.like_count,    0) AS like_count,
-        COALESCE(p.comment_count, 0) AS comment_count,
-        COALESCE(p.view_count,    0) AS view_count,
-        p.created_at,
-        EXISTS(
-          SELECT 1 FROM ${likes} l
-          WHERE l.post_id = p.id
-            AND l.user_id = ${session.user.id}
-        ) AS is_liked,
-        EXISTS(
-          SELECT 1 FROM ${bookmarks} b
-          WHERE b.post_id = p.id
-            AND b.user_id = ${session.user.id}
-        ) AS is_bookmarked
-      FROM ${posts} p
-      WHERE p.creator_id = ${profile.creator_id}
-        AND p.status     = 'published'
-        AND (
-          p.is_locked = false
-          OR ${isSubscribed} = true
-        )
-      ORDER BY p.created_at DESC
-      LIMIT 20
-    `);
+  // ── Suggested creators ─────────────────────────────────────────────────────
+  const suggestedCreators = await getSuggestedCreators(
+    currentUserId,
+    userRow.id,  // exclude the creator being viewed
+    8,
+  );
+  console.log("[creator-profile] suggestedCreators:", suggestedCreators.length);
 
-    formattedPosts = postsData.rows.map((post) => ({
-      id:           post.id,
-      title:        post.title        ?? null,
-      description:  post.description  ?? null,
-      mediaType:    post.media_type,
-      mediaUrl:     post.media_url,
-      thumbnailUrl: post.thumbnail_url ?? null,
-      duration:     post.duration != null ? Number(post.duration) : null, // ← mapped
-      isLocked:     Boolean(post.is_locked),
-      ppvPrice:     post.ppv_price    ? parseFloat(post.ppv_price) : null,
-      likeCount:    Number(post.like_count    ?? 0),
-      commentCount: Number(post.comment_count ?? 0),
-      viewCount:    Number(post.view_count    ?? 0),
-      createdAt:    post.created_at   ? new Date(post.created_at) : new Date(),
-      isLiked:      Boolean(post.is_liked),
-      isBookmarked: Boolean(post.is_bookmarked),
-    }));
-  }
-
-  // ── Format profile ────────────────────────────────────────────────────────
-  const profileFormatted = {
-    userId:          profile.user_id,
-    name:            profile.name,
-    username:        profile.username,
-    bio:             profile.bio            ?? null,
-    avatarUrl:       profile.avatar_url     ?? null,
-    coverUrl:        profile.cover_url      ?? null,
-    location:        profile.location       ?? null,
-    website:         profile.website        ?? null,
-    joinedAt:        profile.created_at     ? new Date(profile.created_at) : new Date(),
-    isVerified:      Boolean(profile.is_verified),
-    subscriberCount: Number(profile.subscriber_count ?? 0),
-    postCount:       Number(profile.post_count       ?? 0),
-    isCreator:       !!profile.creator_id,
-    creatorId:       profile.creator_id     ?? null,
-    standardPrice:   profile.standard_price ? parseFloat(profile.standard_price) : null,
-    vipPrice:        profile.vip_price      ? parseFloat(profile.vip_price)      : null,
+  // ── Shape the profile prop ─────────────────────────────────────────────────
+  const profile = {
+    userId:          userRow.id,
+    name:            userRow.name,
+    username:        profileRow.username ?? username,
+    bio:             profileRow.bio        ?? null,
+    avatarUrl:       profileRow.avatarUrl  ?? null,
+    coverUrl:        profileRow.coverUrl   ?? null,
+    location:        profileRow.location   ?? null,
+    website:         profileRow.website    ?? null,
+    joinedAt:        userRow.createdAt,
+    isVerified:      creatorRow.isVerified ?? false,
+    subscriberCount: creatorRow.subscriberCount ?? 0,
+    postCount:       creatorRow.postCount        ?? 0,
+    standardPrice:   creatorRow.standardPrice != null
+                       ? Number(creatorRow.standardPrice) / 100   // stored as cents
+                       : null,
+    vipPrice:        creatorRow.vipPrice != null
+                       ? Number(creatorRow.vipPrice)              // stored as dollars
+                       : null,
+    isCreator:       true,
+    creatorId:       creatorRow.id,
   };
 
-  return (
-    <CreatorProfileDashboard
-      profile={profileFormatted}
-      posts={formattedPosts}
-      isOwnProfile={isOwnProfile}
-      isSubscribed={isSubscribed}
-      subscriptionTier={subscriptionTier}
-      currentUserId={session.user.id}
+  // ── Shape posts ────────────────────────────────────────────────────────────
+  const shapedPosts = postRows.map((p) => ({
+    id:           p.id,
+    title:        p.title        ?? null,
+    description:  p.description  ?? null,
+    mediaType:    (p.mediaType   ?? "image") as "image" | "video",
+    mediaUrl:     p.mediaUrl     ?? "",
+    thumbnailUrl: p.thumbnailUrl ?? null,
+    duration:     p.duration     ?? null,
+    isLocked:     p.isLocked     ?? false,
+    ppvPrice:     p.ppvPrice     ?? null,
+    likeCount:    p.likeCount    ?? 0,
+    commentCount: p.commentCount ?? 0,
+    createdAt:    p.createdAt,
+    isLiked:      false,
+  }));
+
+ // app/[username]/page.tsx
+// Replace the return statement with this:
+
+// app/[username]/page.tsx — update the return statement:
+
+
+return (
+  <div className="w-full" style={{ fontFamily: "'Be Vietnam Pro', sans-serif" }}>
+    <div className="flex gap-6 max-w-6xl mx-auto" style={{ alignItems: "flex-start" }}>
+
+      {/* ── Main: creator profile ── */}
+      <main className="flex-1 min-w-0">
+        <CreatorProfileDashboard
+          profile={profile}
+          posts={shapedPosts}
+          isOwnProfile={isOwnProfile}
+          isSubscribed={isSubscribed}
+          subscriptionTier={subscriptionTier}
+          currentUserId={currentUserId}
+        />
+      </main>
+
+      {/* ── Right: fixed sidebar — identical to feed page ── */}
+      {suggestedCreators.length > 0 && (
+      <aside className="hidden lg:block w-72 flex-shrink-0">
+  <div
+    style={{
+      position:       "fixed",
+      top:            "5rem",
+      right:          "calc((100vw - 72rem - var(--sidebar-width, 256px)) / 2)",
+      width:          "18rem",
+      maxHeight:      "calc(100vh - 5.5rem)",
+      overflowY:      "auto",
+      scrollbarWidth: "none",
+      transition:     "right 0.3s ease",  // matches sidebar animation
+    }}
+  >
+    <SuggestedCreatorsSidebar
+      initialCreators={suggestedCreators}
+      currentUserId={currentUserId}
     />
-  );
+  </div>
+</aside>
+      )}
+
+    </div>
+  </div>
+);
 }

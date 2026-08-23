@@ -355,6 +355,7 @@ export interface DbUser extends SessionUser {
   banned: boolean;
   banReason?: string | null;
   banExpires?: Date | null;
+  onboardingCompleted?: boolean;
 }
 
 
@@ -410,6 +411,7 @@ export interface DayReward {
   rewardLabel: string;
   isSpecialDay: boolean;
   state: DayState;
+  isVipOnly: boolean; // gift/badge rewards only claimable by VIP — free users see it greyed out
 }
 
 export interface StreakMilestone {

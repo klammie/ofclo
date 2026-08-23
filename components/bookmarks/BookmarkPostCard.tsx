@@ -2,7 +2,8 @@
 
 // components/bookmarks/BookmarkPostCard.tsx
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
@@ -43,6 +44,67 @@ function formatDate(d: string | Date): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// ─── Fullscreen media viewer ──────────────────────────────────────────────────
+function FullscreenMediaViewer({ post, onClose }: { post: any; onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+
+  const isVideo = post.mediaType === "video";
+
+  const viewer = (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.96)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+
+      {/* Close */}
+      <button onClick={onClose}
+        className="absolute top-4 right-4 z-20 size-9 rounded-full flex items-center justify-center transition-all hover:scale-105"
+        style={{ background: "rgba(255,255,255,0.1)", color: "#fff", backdropFilter: "blur(4px)" }}>
+        ✕
+      </button>
+
+      {/* Media — full, uncropped */}
+      <div className="relative w-full h-full flex items-center justify-center p-4 sm:p-10"
+        onClick={(e) => e.stopPropagation()}>
+        {isVideo ? (
+          <video
+            src={post.mediaUrl}
+            poster={post.thumbnailUrl ?? undefined}
+            controls
+            autoPlay
+            className="max-w-full max-h-full"
+            style={{ objectFit: "contain" }}
+            controlsList="nodownload"
+            onContextMenu={(e) => e.preventDefault()}
+          />
+        ) : (
+          <img
+            src={post.mediaUrl ?? post.thumbnailUrl}
+            alt={post.title ?? "Post"}
+            className="max-w-full max-h-full select-none"
+            style={{ objectFit: "contain" }}
+            onContextMenu={(e) => e.preventDefault()}
+          />
+        )}
+      </div>
+    </div>
+  );
+
+  // Render via portal directly into document.body — this escapes any parent
+  // element with a CSS transform (the card uses transform: scale() for its
+  // remove animation), which would otherwise turn "fixed" into a local
+  // containing block instead of covering the full viewport.
+  if (typeof document === "undefined") return null;
+  return createPortal(viewer, document.body);
+}
+
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 export function BookmarkPostCard({ post, currentUserId, onRemoveBookmark }: {
   post:              any;
@@ -50,6 +112,7 @@ export function BookmarkPostCard({ post, currentUserId, onRemoveBookmark }: {
   onRemoveBookmark:  (id: string) => void;
 }) {
   const [isRemoving, setIsRemoving] = useState(false);
+  const [showFullscreen, setShowFullscreen] = useState(false);
   const [removed,    setRemoved]    = useState(false);
 
   async function handleRemove() {
@@ -92,7 +155,13 @@ export function BookmarkPostCard({ post, currentUserId, onRemoveBookmark }: {
       }}
     >
       {/* ── Media ── */}
-      <div className="relative w-full overflow-hidden group" style={{ aspectRatio: "1 / 1" }}>
+      <div
+        className="relative w-full overflow-hidden group cursor-pointer"
+        style={{ aspectRatio: "1 / 1" }}
+        onClick={() => {
+          if (post.mediaUrl || post.thumbnailUrl) setShowFullscreen(true);
+        }}
+      >
 
         {/* Thumbnail */}
         {thumb ? (
@@ -123,7 +192,7 @@ export function BookmarkPostCard({ post, currentUserId, onRemoveBookmark }: {
 
         {/* Remove bookmark button */}
         <button
-          onClick={handleRemove}
+          onClick={(e) => { e.stopPropagation(); handleRemove(); }}
           disabled={isRemoving}
           className="absolute top-2.5 right-2.5 size-8 rounded-xl flex items-center justify-center transition-all hover:scale-110 active:scale-95"
           style={{
@@ -221,6 +290,11 @@ export function BookmarkPostCard({ post, currentUserId, onRemoveBookmark }: {
           )}
         </div>
       </div>
+
+      {/* Fullscreen media viewer */}
+      {showFullscreen && (post.mediaUrl || post.thumbnailUrl) && (
+        <FullscreenMediaViewer post={post} onClose={() => setShowFullscreen(false)} />
+      )}
     </div>
   );
 }

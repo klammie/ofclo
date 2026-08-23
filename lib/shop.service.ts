@@ -4,9 +4,10 @@ import {
   userInventory,
   shopPurchaseLog,
   userCoinBalance,
+  userWallet,
 } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
-import type { ShopItem, PurchaseResponse } from "@/types/shop";
+import type { ShopItem, PurchaseResponse } from "@/lib/types";
 
 // ─── Get or create coin balance ───────────────────────────────────────────────
 
@@ -32,13 +33,22 @@ export async function getUserCoinBalance(userId: string): Promise<number> {
   return initial;
 }
 
-// ─── Get user inventory map { itemId → quantity } ─────────────────────────────
-
-export async function getUserInventory(userId: string): Promise<Map<string, number>> {
-  const rows = await db.query.userInventory.findMany({
-    where: eq(userInventory.userId, userId),
-  });
-  return new Map(rows.map((r) => [r.itemId, r.quantity]));
+// ─── Get user inventory map (itemId → quantity) ───────────────────────────────
+// Uses explicit column select to avoid crashing if optional columns don't exist yet
+async function getUserInventory(userId: string): Promise<Map<string, number>> {
+  try {
+    const rows = await db
+      .select({
+        itemId:   userInventory.itemId,
+        quantity: userInventory.quantity,
+      })
+      .from(userInventory)
+      .where(eq(userInventory.userId, userId));
+    return new Map(rows.map((r) => [r.itemId, r.quantity]));
+  } catch (e: any) {
+    console.warn("[getUserInventory] failed, returning empty:", e?.message);
+    return new Map();
+  }
 }
 
 // ─── Get all active shop items ────────────────────────────────────────────────
@@ -109,18 +119,31 @@ export async function purchaseWithCoins(
 
   // ── All checks passed — perform writes ────────────────────────────────────
 
-  // 1. Deduct coins
-  await db
+  // 1. Deduct coins — sync BOTH balance tables so wallet UI and shop UI agree
+  await Promise.all([
+  // userCoinBalance — what the shop reads
+  db
     .insert(userCoinBalance)
     .values({ userId, balance: newBalance, lifetimeEarned: 0, lifetimeSpent: item.coinPrice })
     .onConflictDoUpdate({
       target: userCoinBalance.userId,
       set: {
-        balance: sql`${userCoinBalance.balance} - ${item.coinPrice}`,
+        balance:       sql`${userCoinBalance.balance} - ${item.coinPrice}`,
         lifetimeSpent: sql`${userCoinBalance.lifetimeSpent} + ${item.coinPrice}`,
-        updatedAt: new Date(),
+        updatedAt:     new Date(),
       },
-    });
+    }),
+
+  // user_wallet — what the wallet dashboard reads
+  db
+    .update(userWallet)
+    .set({
+      coinsBalance: sql`${userWallet.coinsBalance} - ${item.coinPrice}`,
+      lifetimeSpent: sql`${userWallet.lifetimeSpent} + ${item.coinPrice}`,
+      updatedAt:    new Date(),
+    })
+    .where(eq(userWallet.userId, userId)),
+]);
 
   // 2. Add to inventory (upsert quantity for stackable items)
   const existingInv = await db.query.userInventory.findFirst({

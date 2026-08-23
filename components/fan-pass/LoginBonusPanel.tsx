@@ -34,28 +34,34 @@ function rewardCfg(type: string) {
 }
 
 // ─── Day reward card ──────────────────────────────────────────────────────────
-function DayCard({ day, isToday, justClaimed }: {
-  day: DayReward; isToday: boolean; justClaimed: boolean;
+function DayCard({ day, isToday, justClaimed, isUserVip }: {
+  day: DayReward; isToday: boolean; justClaimed: boolean; isUserVip: boolean;
 }) {
-  const cfg      = rewardCfg(day.rewardType);
-  const claimed  = day.state === "claimed";
-  const locked   = day.state === "locked";
-  const showDone = claimed || (isToday && justClaimed);
+  const cfg        = rewardCfg(day.rewardType);
+  const claimed     = day.state === "claimed";
+  const locked       = day.state === "locked";
+  const showDone     = claimed || (isToday && justClaimed);
+  // VIP-locked: this specific reward (badge/gift/frame) requires VIP, and the
+  // viewing user isn't VIP. Distinct from `locked` (day hasn't arrived yet) —
+  // this shows even on reachable/past days as a permanent upgrade incentive.
+  const isVipLocked = day.isVipOnly && !isUserVip && !showDone;
 
   return (
     <div className="relative flex flex-col items-center gap-2 rounded-[18px] border p-3 transition-all duration-300 select-none"
       style={{
-        background:  showDone  ? "rgba(34,197,94,0.08)"
-                   : isToday   ? `${cfg.bg}`
-                   : locked    ? "rgba(255,255,255,0.02)"
+        background:  showDone     ? "rgba(34,197,94,0.08)"
+                   : isVipLocked  ? "rgba(251,191,36,0.04)"
+                   : isToday      ? `${cfg.bg}`
+                   : locked       ? "rgba(255,255,255,0.02)"
                    : "rgba(255,255,255,0.03)",
-        borderColor: showDone  ? "rgba(34,197,94,0.4)"
-                   : isToday   ? cfg.border
-                   : locked    ? "rgba(255,255,255,0.06)"
+        borderColor: showDone     ? "rgba(34,197,94,0.4)"
+                   : isVipLocked  ? "rgba(251,191,36,0.25)"
+                   : isToday      ? cfg.border
+                   : locked       ? "rgba(255,255,255,0.06)"
                    : BORDER,
-        boxShadow:   isToday && !showDone ? `0 0 18px ${cfg.color}30` : "none",
+        boxShadow:   isToday && !showDone && !isVipLocked ? `0 0 18px ${cfg.color}30` : "none",
         transform:   isToday  ? "scale(1.04)" : "scale(1)",
-        opacity:     locked   ? 0.45 : 1,
+        opacity:     locked   ? 0.45 : isVipLocked ? 0.65 : 1,
       }}>
 
       {/* State badge */}
@@ -63,43 +69,63 @@ function DayCard({ day, isToday, justClaimed }: {
         <div className="absolute -top-2 -right-2 size-5 rounded-full flex items-center justify-center text-[9px] font-black text-white z-10"
           style={{ background: "#22c55e", boxShadow: "0 0 6px rgba(34,197,94,0.5)" }}>✓</div>
       )}
-      {isToday && !showDone && (
+      {isToday && !showDone && !isVipLocked && (
         <div className="absolute -top-2 -right-2 size-5 rounded-full flex items-center justify-center text-[8px] font-black text-white z-10 animate-pulse"
           style={{ background: P }}>!</div>
+      )}
+      {/* VIP crown badge — shown on any VIP-exclusive day, locked or not */}
+      {isVipLocked && (
+        <div className="absolute -top-2 -right-2 size-5 rounded-full flex items-center justify-center text-[9px] z-10"
+          style={{ background: "#fbbf24", boxShadow: "0 0 6px rgba(251,191,36,0.5)" }}>👑</div>
       )}
 
       {/* Day label */}
       <p className="text-[9px] font-black uppercase tracking-widest"
-        style={{ color: isToday ? cfg.color : "rgba(240,234,255,0.35)" }}>
+        style={{ color: isVipLocked ? "#fbbf24" : isToday ? cfg.color : "rgba(240,234,255,0.35)" }}>
         {day.label}
       </p>
 
       {/* Reward icon */}
-      <div className="size-10 rounded-[12px] flex items-center justify-center text-[22px] border transition-all duration-300"
+      <div className="size-10 rounded-[12px] flex items-center justify-center text-[22px] border transition-all duration-300 relative"
         style={{
-          background:  showDone ? "rgba(34,197,94,0.12)" : isToday ? cfg.bg : "rgba(255,255,255,0.04)",
-          borderColor: showDone ? "rgba(34,197,94,0.35)" : isToday ? cfg.border : "rgba(255,255,255,0.08)",
+          background:  showDone ? "rgba(34,197,94,0.12)" : isToday && !isVipLocked ? cfg.bg : "rgba(255,255,255,0.04)",
+          borderColor: showDone ? "rgba(34,197,94,0.35)" : isToday && !isVipLocked ? cfg.border : "rgba(255,255,255,0.08)",
+          filter:      isVipLocked ? "grayscale(0.6)" : "none",
         }}>
         {showDone ? "✅" : locked ? "🔒" : day.icon}
+        {/* Lock overlay on VIP-only icon */}
+        {isVipLocked && (
+          <div className="absolute inset-0 rounded-[12px] flex items-center justify-center"
+            style={{ background: "rgba(13,13,26,0.55)" }}>
+            <span className="text-[14px]">🔒</span>
+          </div>
+        )}
       </div>
 
       {/* Reward label */}
       <div className="text-center">
         <p className="text-[10px] font-black leading-tight"
-          style={{ color: showDone ? "#4ade80" : isToday ? cfg.color : MUTED }}>
+          style={{ color: showDone ? "#4ade80" : isVipLocked ? "#fbbf24" : isToday ? cfg.color : MUTED }}>
           {showDone ? "Done!" : day.rewardLabel}
         </p>
         {/* Type pill */}
-        {!locked && !showDone && (
+        {!locked && !showDone && !isVipLocked && (
           <span className="text-[8px] font-black rounded-full px-1.5 py-px mt-0.5 inline-block"
             style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}>
             {cfg.label}
           </span>
         )}
+        {/* VIP-only pill */}
+        {isVipLocked && (
+          <span className="text-[8px] font-black rounded-full px-1.5 py-px mt-0.5 inline-block"
+            style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }}>
+            VIP Only
+          </span>
+        )}
       </div>
 
       {/* Special day glow ring */}
-      {day.isSpecialDay && !locked && (
+      {day.isSpecialDay && !locked && !isVipLocked && (
         <div className="absolute inset-0 rounded-[18px] pointer-events-none"
           style={{ boxShadow: `inset 0 0 16px ${cfg.color}25`, border: `1px solid ${cfg.color}40` }} />
       )}
@@ -185,15 +211,24 @@ function MilestoneRow({ milestone }: { milestone: StreakMilestone }) {
 interface LoginBonusPanelProps { seasonId: number; isVip?: boolean; }
 
 export function LoginBonusPanel({ seasonId, isVip = false }: LoginBonusPanelProps) {
-  const { data, isLoading, isClaiming, error, claim } = useLoginBonus(seasonId);
+  const { data, isLoading, isClaiming, error, claim, msUntilNextClaim } = useLoginBonus(seasonId);
   const [justClaimed,    setJustClaimed]    = useState(false);
   const [showClaimAnim,  setShowClaimAnim]  = useState(false);
   const [claimedReward,  setClaimedReward]  = useState<DayReward | null>(null);
   const [claimResult,    setClaimResult]    = useState<ClaimResponse | null>(null);
+  const [vipRequiredMsg, setVipRequiredMsg] = useState<string | null>(null);
 
   const handleClaim = useCallback(async () => {
     if (!data?.canClaimToday || isClaiming) return;
     const todayReward = data.todayReward;
+
+    // Block client-side too — show an upsell instead of attempting the call
+    if (todayReward.isVipOnly && !isVip) {
+      setVipRequiredMsg(`This reward is exclusive to VIP Pass members. Upgrade to claim ${todayReward.rewardLabel}.`);
+      setTimeout(() => setVipRequiredMsg(null), 4000);
+      return;
+    }
+
     const result = await claim();
     if (result?.success) {
       setJustClaimed(true);
@@ -201,7 +236,7 @@ export function LoginBonusPanel({ seasonId, isVip = false }: LoginBonusPanelProp
       setClaimResult(result);
       setShowClaimAnim(true);
     }
-  }, [data, isClaiming, claim]);
+  }, [data, isClaiming, claim, isVip]);
 
   if (isLoading) {
     return (
@@ -227,7 +262,7 @@ export function LoginBonusPanel({ seasonId, isVip = false }: LoginBonusPanelProp
     );
   }
 
-  const { currentStreak, canClaimToday, nextClaimAt, weekRewards, milestones,
+  const { currentStreak, canClaimToday, weekRewards, milestones,
           totalXpEarned, totalCoinsEarned, streakFreezes } = data;
 
   return (
@@ -273,17 +308,31 @@ export function LoginBonusPanel({ seasonId, isVip = false }: LoginBonusPanelProp
                 day={day}
                 isToday={day.state === "today"}
                 justClaimed={justClaimed && day.state === "today"}
+                isUserVip={isVip}
               />
             ))}
           </div>
         </div>
+
+        {/* ── VIP-required upsell toast ── */}
+        {vipRequiredMsg && (
+          <div className="flex items-center gap-3 rounded-2xl border px-4 py-3"
+            style={{ background: "rgba(251,191,36,0.08)", borderColor: "rgba(251,191,36,0.3)" }}>
+            <span className="text-[18px]">👑</span>
+            <p className="text-[12px] font-bold flex-1" style={{ color: "#fbbf24" }}>{vipRequiredMsg}</p>
+          </div>
+        )}
 
         {/* ── Claim button / countdown ── */}
         {canClaimToday && !justClaimed ? (
           <button onClick={handleClaim} disabled={isClaiming}
             className="w-full py-4 rounded-2xl text-[15px] font-black text-white transition-all flex items-center justify-center gap-2"
             style={{
-              background: isClaiming ? "rgba(239,57,118,0.3)" : `linear-gradient(135deg, ${P}, #c0305f)`,
+              background: isClaiming
+                ? "rgba(239,57,118,0.3)"
+                : data.todayReward?.isVipOnly && !isVip
+                  ? "linear-gradient(135deg, #92400e, #78350f)"
+                  : `linear-gradient(135deg, ${P}, #c0305f)`,
               boxShadow:  isClaiming ? "none" : "0 8px 28px rgba(239,57,118,0.4)",
               opacity:    isClaiming ? 0.7 : 1,
             }}>
@@ -292,6 +341,8 @@ export function LoginBonusPanel({ seasonId, isVip = false }: LoginBonusPanelProp
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="white" strokeWidth="4"/>
                 <path className="opacity-75" fill="white" d="M4 12a8 8 0 018-8v8H4z"/>
               </svg>Claiming…</>
+            ) : data.todayReward?.isVipOnly && !isVip ? (
+              <>👑 VIP Required — {data.todayReward.rewardLabel}</>
             ) : (
               <><span className="text-[20px]">{data.todayReward?.icon}</span>
                 Claim Today's Reward — {data.todayReward?.rewardLabel}</>
@@ -301,16 +352,16 @@ export function LoginBonusPanel({ seasonId, isVip = false }: LoginBonusPanelProp
           <div className="w-full py-3.5 rounded-2xl text-[14px] font-black flex items-center justify-center gap-2 border"
             style={{ background: "rgba(34,197,94,0.08)", borderColor: "rgba(34,197,94,0.3)", color: "#4ade80" }}>
             ✓ Today's reward claimed!
-            {nextClaimAt && (
+            {msUntilNextClaim > 0 && (
               <span className="font-bold" style={{ color: "rgba(34,197,94,0.7)" }}>
-                · Next in {formatCountdown(nextClaimAt)}
+                · Next in {formatCountdown(msUntilNextClaim)}
               </span>
             )}
           </div>
         ) : (
           <div className="w-full py-3.5 rounded-2xl text-[13px] font-black flex items-center justify-center gap-2 border"
             style={{ background: "rgba(255,255,255,0.03)", borderColor: BORDER, color: MUTED }}>
-            ⏰ Next reward in {nextClaimAt ? formatCountdown(nextClaimAt) : "–"}
+            ⏰ Next reward in {msUntilNextClaim > 0 ? formatCountdown(msUntilNextClaim) : "–"}
           </div>
         )}
 

@@ -42,16 +42,17 @@ export function LandingNav({ anchored = true }: LandingNavProps) {
     <nav
       className="fixed top-0 left-0 right-0 z-50 transition-all duration-300"
       style={{
-        background:   scrolled ? "rgba(13,13,26,0.95)" : "transparent",
-        backdropFilter: scrolled ? "blur(20px)" : "none",
-        borderBottom: scrolled ? `1px solid ${BORDER}` : "none",
+        background:   scrolled ? "rgba(10,8,20,0.98)" : "rgba(10,8,20,0)",
+        backdropFilter: scrolled ? "blur(24px) saturate(180%)" : "none",
+        borderBottom: scrolled ? `1px solid ${BORDER}` : "1px solid transparent",
+        boxShadow:    scrolled ? "0 2px 40px rgba(0,0,0,0.5)" : "none",
       }}
     >
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div className="max-w-6xl mx-auto px-6 py-2.5 flex items-center justify-between">
 
         {/* Logo */}
         <a href="/" style={{ textDecoration: "none" }}
-          className="flex items-center gap-2.5 size-38">
+          className="flex items-center gap-2.5 size-24">
           <img src="\Copilot_20260423_142214.png" alt="logo" />
   
         </a>

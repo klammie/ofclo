@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { invalidateCounts } from "@/lib/hooks/useAppCounts";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const V      = "#7c3aed";
@@ -245,6 +246,17 @@ export function ChatWindow({ otherUser, initialMessages, currentUserId, isCreato
   const bottomRef  = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLTextAreaElement>(null);
 
+  // Mark all messages from the other user as read when the chat opens
+  useEffect(() => {
+    fetch("/api/messages/read", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ fromUserId: otherUser.id }),
+    })
+      .then(() => invalidateCounts()) // bust cache so sidebar badge clears
+      .catch(() => {});
+  }, [otherUser.id]);
+
   // Auto-scroll on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -289,6 +301,7 @@ export function ChatWindow({ otherUser, initialMessages, currentUserId, isCreato
       if (res.ok) {
         const { message } = await res.json();
         setMessages((prev) => prev.map((m) => m.id === optimistic.id ? message : m));
+        invalidateCounts(); // update sidebar badge for recipient
       }
     } catch {}
     finally { setSending(false); }

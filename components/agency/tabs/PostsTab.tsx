@@ -2,29 +2,37 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { AgencyPostCreationModal } from "../AgencyPostCreationModal";
 
-export function PostsTab({ creatorId, creatorUserId }) {
-  const router = useRouter();
-  const [posts, setPosts] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [filter, setFilter] = useState("all"); // all, published, scheduled, draft
+const V      = "#7c3aed";
+const P      = "#ef3976";
+const GRAD   = `linear-gradient(135deg, ${V}, ${P})`;
+const BORDER = "rgba(124,58,237,0.18)";
+const MUTED  = "rgba(240,234,255,0.45)";
+const TEXT   = "#f0eaff";
 
-  useEffect(() => {
-    fetchPosts();
-  }, [filter]);
+export function PostsTab({ creatorId, creatorUserId, creatorName }: {
+  creatorId: string;
+  creatorUserId: string;
+  creatorName: string;
+}) {
+  const [posts,          setPosts]          = useState<any[]>([]);
+  const [isLoading,      setIsLoading]      = useState(true);
+  const [filter,         setFilter]         = useState("all");
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
+  useEffect(() => { fetchPosts(); }, [filter]);
 
   async function fetchPosts() {
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/agency/creators/${creatorId}/posts?filter=${filter}`);
-      if (response.ok) {
-        const data = await response.json();
+      const res = await fetch(`/api/agency/creators/${creatorId}/posts?filter=${filter}`);
+      if (res.ok) {
+        const data = await res.json();
         setPosts(data.posts);
       }
-    } catch (error) {
-      console.error("Failed to fetch posts:", error);
+    } catch (e) {
+      console.error("Failed to fetch posts:", e);
     } finally {
       setIsLoading(false);
     }
@@ -32,117 +40,121 @@ export function PostsTab({ creatorId, creatorUserId }) {
 
   async function handleDeletePost(postId: string) {
     if (!confirm("Delete this post?")) return;
-
-    try {
-      const response = await fetch(`/api/agency/posts/${postId}/delete`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        fetchPosts();
-      } else {
-        alert("Failed to delete post");
-      }
-    } catch (error) {
-      console.error("Delete error:", error);
-      alert("Failed to delete post");
-    }
+    const res = await fetch(`/api/agency/posts/${postId}/delete`, { method: "DELETE" });
+    if (res.ok) fetchPosts();
+    else alert("Failed to delete post");
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex gap-3">
-          {["all", "published", "scheduled", "draft"].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-4 py-2 rounded-lg font-semibold capitalize transition-colors ${
-                filter === f
-                  ? "bg-pink-500 text-white"
-                  : "bg-gray-800 text-gray-400 hover:text-white"
-              }`}
-            >
-              {f}
-            </button>
-          ))}
+    <>
+      <div className="space-y-6" style={{ fontFamily: "'Be Vietnam Pro', sans-serif" }}>
+        {/* Toolbar */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex gap-2">
+            {["all", "published", "scheduled", "draft"].map((f) => (
+              <button key={f} onClick={() => setFilter(f)}
+                className="px-4 py-2 rounded-lg font-black capitalize text-[12px] transition-colors"
+                style={filter === f
+                  ? { background: GRAD, color: "#fff" }
+                  : { background: "rgba(255,255,255,0.04)", color: MUTED, border: `1px solid ${BORDER}` }}>
+                {f}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[12px] font-black text-white transition-all hover:opacity-90 active:scale-[0.97]"
+            style={{ background: GRAD, boxShadow: "0 4px 14px rgba(124,58,237,0.3)" }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Create Post
+          </button>
         </div>
-        
-        <Link
-          href={`/dashboard/agency/creators/${creatorId}/create-post`}
-          className="px-6 py-3 rounded-lg bg-linear-to-r from-pink-500 to-purple-600 text-white font-semibold hover:from-pink-600 hover:to-purple-700 transition-all"
-        >
-          + Create Post
-        </Link>
+
+        {/* Grid */}
+        {isLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="rounded-2xl animate-pulse"
+                style={{ background: "#1a1635", aspectRatio: "1/1", border: `1px solid ${BORDER}` }} />
+            ))}
+          </div>
+        ) : posts.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-20 rounded-2xl border text-center"
+            style={{ background: "#1a1635", borderColor: BORDER }}>
+            <span className="text-4xl">📭</span>
+            <p className="text-[14px] font-black" style={{ color: TEXT }}>No posts found</p>
+            <p className="text-[12px]" style={{ color: MUTED }}>Create a post to get started</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            {posts.map((post: any) => (
+              <PostCard key={post.id} post={post} onDelete={handleDeletePost} />
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Posts Grid */}
-      {isLoading ? (
-        <div className="text-center py-12 text-gray-400">Loading posts...</div>
-      ) : posts.length === 0 ? (
-        <div className="text-center py-12 bg-gray-900/50 rounded-2xl border border-white/10">
-          <div className="text-4xl mb-2">📭</div>
-          <p className="text-gray-400">No posts found</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {posts.map((post: any) => (
-            <PostCard 
-              key={post.id} 
-              post={post} 
-              onDelete={handleDeletePost}
-            />
-          ))}
-        </div>
+      {showCreateModal && (
+        <AgencyPostCreationModal
+          creatorId={creatorId}
+          creatorName={creatorName}
+          onClose={() => setShowCreateModal(false)}
+          onCreated={() => {
+            setShowCreateModal(false);
+            fetchPosts();
+          }}
+        />
       )}
-    </div>
+    </>
   );
 }
 
-function PostCard({ post, onDelete }) {
+function PostCard({ post, onDelete }: { post: any; onDelete: (id: string) => void }) {
+  const statusColors: Record<string, string> = {
+    published: "#22c55e",
+    scheduled: "#38bdf8",
+    draft:     "#94a3b8",
+  };
+  const color = statusColors[post.status] ?? "#94a3b8";
+
   return (
-    <div className="bg-gray-900/50 backdrop-blur-sm rounded-2xl border border-white/10 overflow-hidden">
-      {/* Media */}
-      <div className="relative aspect-square bg-gray-800">
+    <div className="rounded-2xl overflow-hidden border"
+      style={{ background: "#1a1635", borderColor: "rgba(124,58,237,0.12)" }}>
+      <div className="relative" style={{ aspectRatio: "1/1", background: "#0d0d1a" }}>
         {post.media_type === "image" ? (
-          <img src={post.thumbnail_url || post.media_url} alt={post.title || "Post"} className="w-full h-full object-cover" />
+          <img src={post.thumbnail_url || post.media_url} alt={post.title || "Post"}
+            className="w-full h-full object-cover" />
         ) : (
           <video src={post.media_url} className="w-full h-full object-cover" muted />
         )}
-        
-        {/* Status Badge */}
-        <div className="absolute top-3 right-3">
-          <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-            post.status === "published" ? "bg-green-500 text-white" :
-            post.status === "scheduled" ? "bg-blue-500 text-white" :
-            "bg-gray-500 text-white"
-          }`}>
-            {post.status}
-          </span>
+        <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase"
+          style={{ background: `${color}25`, color, border: `1px solid ${color}50` }}>
+          {post.status}
         </div>
+        {post.is_locked && (
+          <div className="absolute top-2.5 left-2.5 size-6 rounded-full flex items-center justify-center"
+            style={{ background: "rgba(0,0,0,0.6)" }}>
+            <span className="text-[10px]">🔒</span>
+          </div>
+        )}
       </div>
 
-      {/* Info */}
-      <div className="p-4">
+      <div className="p-3">
         {post.title && (
-          <h4 className="text-white font-semibold mb-1 line-clamp-1">{post.title}</h4>
+          <p className="text-[12px] font-black truncate mb-1" style={{ color: "#f0eaff" }}>{post.title}</p>
         )}
-        <div className="flex items-center gap-3 text-xs text-gray-400 mb-3">
-          <span>❤️ {post.like_count}</span>
-          <span>💬 {post.comment_count}</span>
-          {post.is_locked && <span>🔒 Locked</span>}
+        <div className="flex items-center gap-3 text-[10px] mb-2.5" style={{ color: "rgba(240,234,255,0.4)" }}>
+          <span>❤️ {post.like_count ?? 0}</span>
+          <span>💬 {post.comment_count ?? 0}</span>
         </div>
-
-        {/* Actions */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => onDelete(post.id)}
-            className="flex-1 py-2 rounded-lg bg-red-500/20 text-red-400 text-sm font-semibold hover:bg-red-500/30 transition-colors"
-          >
-            🗑️ Delete
-          </button>
-        </div>
+        <button onClick={() => onDelete(post.id)}
+          className="w-full py-1.5 rounded-lg text-[11px] font-black transition-all"
+          style={{ background: "rgba(239,57,118,0.1)", color: "#ef3976", border: "1px solid rgba(239,57,118,0.2)" }}>
+          🗑️ Delete
+        </button>
       </div>
     </div>
   );

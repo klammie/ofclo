@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "@/lib/auth/client";
 import type { SessionUser } from "@/lib/auth";
 import Image from "next/image";
 import StatusModal, { getTierFromXp, getNextTier } from "@/components/status/StatusModal";
+import { useAppCounts } from "@/lib/hooks/useAppCounts";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const V      = "#7c3aed";
@@ -102,6 +103,8 @@ function StatusBadge({ tier, isOpen }: { tier: ReturnType<typeof getTierFromXp>;
     </div>
   );
 }
+
+
 
 // ─── Avatar with tier ring ────────────────────────────────────────────────────
 function TieredAvatar({
@@ -227,6 +230,7 @@ export function Sidebar({ user, isOpen = true, onToggle, statusXp = 0 }: Sidebar
   const router        = useRouter();
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showStatus,   setShowStatus]   = useState(false);
+  const { messages: unreadMessages } = useAppCounts();
 
   if (!user) {
     return (
@@ -245,6 +249,7 @@ export function Sidebar({ user, isOpen = true, onToggle, statusXp = 0 }: Sidebar
   const visibleNav = NAV_ITEMS.filter((item) => item.roles.includes(userRole));
   const tier       = getTierFromXp(statusXp);
   const nextTier   = getNextTier(tier);
+ 
 
   async function handleSignOut() {
     setIsSigningOut(true);
@@ -306,15 +311,33 @@ export function Sidebar({ user, isOpen = true, onToggle, statusXp = 0 }: Sidebar
 
             {isOpen && (
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-[13px] font-black truncate" style={{ color: TEXT }}>
-                    {user.name}
-                  </p>
-                  <StatusBadge tier={tier} isOpen={isOpen} />
-                </div>
-                <p className="text-[10px] capitalize mt-0.5" style={{ color: MUTED }}>
-                  {userRole}
+                <p className="text-[13px] font-black truncate mb-1" style={{ color: TEXT }}>
+                  {user.name}
                 </p>
+                {/* Status + Role badges on same row */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <StatusBadge tier={tier} isOpen={isOpen} />
+                  {(() => {
+                    const roleConfig: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
+                      user:    { label: "Fan",     color: "#38bdf8", bg: "rgba(56,189,248,0.12)",  border: "rgba(56,189,248,0.3)",  icon: "⭐" },
+                      creator: { label: "Creator", color: "#a78bfa", bg: "rgba(124,58,237,0.15)", border: "rgba(124,58,237,0.35)", icon: "✨" },
+                      agency:  { label: "Agency",  color: "#fbbf24", bg: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.3)",  icon: "🏢" },
+                      admin:   { label: "Admin",   color: "#ef3976", bg: "rgba(239,57,118,0.12)",  border: "rgba(239,57,118,0.3)",  icon: "🛡️" },
+                    };
+                    const cfg = roleConfig[userRole] ?? roleConfig.user;
+                    return (
+                      <div
+                        className="flex items-center gap-1 rounded-full px-2 py-0.5"
+                        style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
+                      >
+                        <span style={{ fontSize: 9 }}>{cfg.icon}</span>
+                        <span className="text-[9px] font-black uppercase tracking-wider" style={{ color: cfg.color }}>
+                          {cfg.label}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             )}
           </div>
@@ -347,7 +370,10 @@ export function Sidebar({ user, isOpen = true, onToggle, statusXp = 0 }: Sidebar
           style={{ scrollbarWidth: "none" }}>
           <div className="flex flex-col gap-0.5">
             {visibleNav.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+              const isActive    = pathname === item.href || pathname.startsWith(item.href + "/");
+              const isMessages  = item.label === "Messages";
+              const msgBadge    = isMessages && unreadMessages > 0 ? unreadMessages : 0;
+
               return (
                 <a key={item.href} href={item.href}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 ${!isOpen ? "justify-center" : ""}`}
@@ -357,17 +383,33 @@ export function Sidebar({ user, isOpen = true, onToggle, statusXp = 0 }: Sidebar
                   onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
                   onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
 
-                  <span className="text-[17px] flex-shrink-0">{item.icon}</span>
+                  {/* Icon — with dot badge when collapsed */}
+                  <div className="relative flex-shrink-0">
+                    <span className="text-[17px]">{item.icon}</span>
+                    {!isOpen && msgBadge > 0 && (
+                      <span
+                        className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2"
+                        style={{ background: P, borderColor: SURF }}
+                      />
+                    )}
+                  </div>
 
                   {isOpen && (
                     <>
                       <span className="flex-1 text-[13px] font-bold">{item.label}</span>
-                      {item.badge && (
+
+                      {/* Unread message count — takes priority over static badge */}
+                      {msgBadge > 0 ? (
+                        <span className="rounded-full px-2 py-0.5 text-[9px] font-black text-white"
+                          style={{ background: P }}>
+                          {msgBadge > 9 ? "9+" : msgBadge}
+                        </span>
+                      ) : item.badge ? (
                         <span className="rounded-full px-2 py-0.5 text-[9px] font-black text-white"
                           style={{ background: typeof item.badge === "number" ? P : V }}>
                           {item.badge}
                         </span>
-                      )}
+                      ) : null}
                     </>
                   )}
                 </a>

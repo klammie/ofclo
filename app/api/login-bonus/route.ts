@@ -1,26 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
-import { LoginBonusData } from "@/lib/types"
-import { db } from "@/db";
-import { eq } from "drizzle-orm";
-import type { ApiError } from "@/lib/types";
 import { getLoginBonusData } from "@/lib/login-bonus.service";
-
-// Helper: check if the user has an active VIP fan pass subscription.
-// Adjust this query to match your actual subscriptions/fan-pass table.
-async function checkIsVip(userId: string): Promise<boolean> {
-  // Example — replace with your real table:
-  // const sub = await db.query.fanPassSubscriptions.findFirst({
-  //   where: and(
-  //     eq(fanPassSubscriptions.userId, userId),
-  //     eq(fanPassSubscriptions.tier, "vip"),
-  //     gt(fanPassSubscriptions.expiresAt, new Date())
-  //   ),
-  // });
-  // return !!sub;
-  return false; // placeholder until you wire up your subscription table
-}
+import { getUserIsFanPassVip } from "@/lib/fanpass-vip-status.service";
+import type { ApiError } from "@/lib/types";
 
 export async function GET(req: NextRequest) {
   // better-auth session check
@@ -37,7 +20,7 @@ export async function GET(req: NextRequest) {
   const seasonId = parseInt(searchParams.get("seasonId") ?? "1");
 
   try {
-    const isVip = await checkIsVip(session.user.id);
+    const isVip = await getUserIsFanPassVip(session.user.id, seasonId);
     const data = await getLoginBonusData(session.user.id, seasonId, isVip);
     return NextResponse.json(data);
   } catch (e) {

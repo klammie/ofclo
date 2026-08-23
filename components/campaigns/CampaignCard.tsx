@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { DonateModal } from "./DonateModal";
-import { TopDonorsModal } from "./TopDonorsModal";
+import { TopDonorsModal } from "./TopDonorModal";
 
 interface CampaignCardProps {
   campaign: any;

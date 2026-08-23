@@ -18,6 +18,8 @@ const CATEGORY_LABELS: Record<QuestCategory, string> = {
 const CATEGORY_ICONS: Record<QuestCategory, string> = {
   daily: "⚡", weekly: "📅", season: "🏆",
 };
+// NOTE: weekly/season tabs removed — Fan Pass quests are daily-only now,
+// rotating automatically each day via the API route's deterministic shuffle.
 
 function xpColor(xp: number): string {
   if (xp >= 150) return "#fbbf24";
@@ -181,44 +183,48 @@ interface QuestsTabProps {
 }
 
 export default function QuestsTab({ seasonId, user }: QuestsTabProps) {
-  const [quests,         setQuests]       = useState<Quest[]>([]);
-  const [loading,        setLoading]      = useState(true);
-  const [activeCategory, setCategory]     = useState<QuestCategory>("daily");
+  const [quests,    setQuests]    = useState<Quest[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [rotatesOn, setRotatesOn] = useState<string | null>(null);
 
-  // Fetch quests from the season tasks API
+  // Fetch today's rotating daily quests + the user's live progress, merged.
   useEffect(() => {
     if (!seasonId) return;
     setLoading(true);
-    fetch(`/api/fan-pass/season/tasks?seasonId=${seasonId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const rawTasks = data.tasks ?? [];
-        console.log("[QuestsTab] raw tasks from API:", rawTasks);
 
+    Promise.all([
+      fetch(`/api/fan-pass/season/tasks?seasonId=${seasonId}`).then((r) => r.json()),
+      fetch(`/api/fan-pass/season/quest-progress?seasonId=${seasonId}`).then((r) => r.json()).catch(() => ({ progress: {} })),
+    ])
+      .then(([taskData, progressData]) => {
+        const rawTasks   = taskData.tasks ?? [];
+        const progressMap = progressData.progress ?? {};
+        setRotatesOn(taskData.rotatesOn ?? null);
+
+        // Route returns only today's rotated subset — all of them are "daily"
         const mapped: Quest[] = rawTasks.map((t: any) => {
-          // Map tier enum to QuestCategory
-          let category: QuestCategory = "daily";
-          if (t.type === "streak")          category = "season";
-          else if (t.tier === "premium")    category = "weekly";
+          const liveProgress = progressMap[t.id];
+          const current = liveProgress?.current ?? 0;
+          const target  = liveProgress?.target  ?? (parseInt((t.title.match(/\d+/) ?? ["1"])[0], 10) || 1);
+          const isDone  = liveProgress?.isCompleted ?? false;
 
           return {
             id:          String(t.id),
-            title:       t.title       ?? t.label ?? "Quest",   // schema uses "title"
+            title:       t.title       ?? t.label ?? "Quest",
             description: t.description ?? "",
             icon:        t.icon        ?? "🎯",
-            category,
+            category:    "daily" as QuestCategory,
             xpReward:    Number(t.xpReward)   || 0,
             coinReward:  Number(t.coinReward)  || 0,
-            isVipBonus:  t.tier === "premium",                   // schema uses tier enum
-            status:      "active" as const,
-            progress:    0,
-            current:     0,
-            target:      1,
+            isVipBonus:  t.tier === "premium",
+            status:      isDone ? "completed" as const : "active" as const,
+            progress:    target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0,
+            current,
+            target,
             expiresAt:   null,
           };
         });
 
-        console.log("[QuestsTab] mapped quests:", mapped);
         setQuests(mapped);
       })
       .catch((e) => {
@@ -228,17 +234,16 @@ export default function QuestsTab({ seasonId, user }: QuestsTabProps) {
       .finally(() => setLoading(false));
   }, [seasonId]);
 
-  const filtered       = quests.filter((q) => q.category === activeCategory);
-  const completedCount = filtered.filter((q) => q.status === "completed").length;
-  const totalCount     = filtered.length;
+  const completedCount = quests.filter((q) => q.status === "completed").length;
+  const totalCount     = quests.length;
   const pct            = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-  const totalXpLeft = filtered
+  const totalXpLeft = quests
     .filter((q) => q.status !== "completed")
     .reduce((s, q) => s + (user.isVip && q.isVipBonus ? q.xpReward * 2 : q.xpReward), 0);
 
   // Sort: in-progress → not started → completed
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = [...quests].sort((a, b) => {
     const rank = (q: Quest) =>
       q.status === "completed" ? 2 : q.progress > 0 ? 0 : 1;
     return rank(a) - rank(b);
@@ -263,36 +268,32 @@ export default function QuestsTab({ seasonId, user }: QuestsTabProps) {
   const active    = sorted.filter((q) => q.status !== "completed");
   const completed = sorted.filter((q) => q.status === "completed");
 
+  // Countdown to next rotation (midnight UTC)
+  const nextRotation = (() => {
+    const now = new Date();
+    const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+    const diffMs = tomorrow.getTime() - now.getTime();
+    const h = Math.floor(diffMs / 3600000);
+    const m = Math.floor((diffMs % 3600000) / 60000);
+    return `${h}h ${m}m`;
+  })();
+
   return (
     <div className="flex flex-col gap-5">
 
-      {/* ── Category pills ── */}
-      <div className="flex gap-2">
-        {(["daily", "weekly", "season"] as QuestCategory[]).map((cat) => {
-          const catQuests = quests.filter((q) => q.category === cat);
-          const done      = catQuests.filter((q) => q.status === "completed").length;
-          const isActive  = activeCategory === cat;
-          return (
-            <button
-              key={cat}
-              onClick={() => setCategory(cat)}
-              className="flex-1 flex flex-col items-center gap-1 rounded-2xl border py-2.5 px-2 transition-all duration-150"
-              style={isActive
-                ? { background: "rgba(239,57,118,0.1)", borderColor: "rgba(239,57,118,0.45)", color: P }
-                : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.4)" }
-              }
-            >
-              <span className="text-[14px]">{CATEGORY_ICONS[cat]}</span>
-              <span className="text-[9px] font-bold uppercase tracking-wider">
-                {CATEGORY_LABELS[cat]}
-              </span>
-              <span className="text-[8px] opacity-60">{done}/{catQuests.length}</span>
-              {isActive && (
-                <div className="size-1.5 rounded-full mt-0.5" style={{ background: P }} />
-              )}
-            </button>
-          );
-        })}
+      {/* ── Header: Daily quests + rotation countdown ── */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[16px]">⚡</span>
+          <p className="text-[14px] font-black text-white">Daily Quests</p>
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full px-3 py-1"
+          style={{ background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.25)" }}>
+          <span className="text-[10px]">🔄</span>
+          <span className="text-[10px] font-bold" style={{ color: "rgba(255,255,255,0.6)" }}>
+            New quests in {nextRotation}
+          </span>
+        </div>
       </div>
 
       {/* ── Progress summary ── */}
@@ -300,7 +301,7 @@ export default function QuestsTab({ seasonId, user }: QuestsTabProps) {
         <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.4)" }}>
           <span className="text-white font-black">{completedCount}</span> of{" "}
           <span className="text-white font-black">{totalCount}</span>{" "}
-          {CATEGORY_LABELS[activeCategory].toLowerCase()} quests done
+          daily quests done
           {totalXpLeft > 0 && (
             <span className="ml-2 font-bold" style={{ color: P }}>
               · {totalXpLeft.toLocaleString()} XP left

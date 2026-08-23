@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { OverviewTab } from "./tabs/OverviewTab";
+import  OverviewTab  from "./tabs/OverviewTab";
 import { PostsTab } from "./tabs/PostsTab";
 import { MessagesTab } from "./tabs/MessagesTab";
 import { SubscribersTab } from "./tabs/SubscribersTab";
@@ -46,7 +46,13 @@ export function CreatorManagementTabs({ creator, stats, agencyId }) {
       {/* Tab Content */}
       <div>
         {activeTab === "overview" && <OverviewTab creator={creator} stats={stats} />}
-        {activeTab === "posts" && <PostsTab creatorId={creator.id} creatorUserId={creator.userId} />}
+        {activeTab === "posts" && (
+  <PostsTab
+    creatorId={creator.id}
+    creatorUserId={creator.userId}
+    creatorName={creator.userName}
+  />
+)}
         {activeTab === "messages" && <MessagesTab creatorUserId={creator.userId} />}
         {activeTab === "subscribers" && <SubscribersTab creatorId={creator.id} />}
         {activeTab === "analytics" && <AnalyticsTab creatorId={creator.id} stats={stats} />}

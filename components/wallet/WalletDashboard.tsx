@@ -107,7 +107,7 @@ function BalanceHero({ balance, onDeposit, onWithdraw }: {
   onWithdraw: () => void;
 }) {
   return (
-    <div className="relative rounded-[20px] overflow-hidden border p-6"
+    <div className="relative rounded-4xl overflow-hidden border p-6"
       style={{ background: `linear-gradient(135deg, rgba(124,58,237,0.15) 0%, rgba(239,57,118,0.1) 100%)`, borderColor: BORDER }}>
       {/* Bg glow */}
       <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full pointer-events-none"
@@ -184,7 +184,7 @@ function CoinPackageCard({ pkg, onBuy, isActing, usdBalance }: {
 
   return (
     <div
-      className="relative flex flex-col rounded-[16px] border overflow-hidden transition-all duration-150 hover:scale-[1.01]"
+      className="relative flex flex-col rounded-3xl border overflow-hidden transition-all duration-150 hover:scale-[1.01]"
       style={{
         background: pkg.isBestValue ? `linear-gradient(160deg, rgba(251,191,36,0.1), ${CARD})` : CARD,
         borderColor: pkg.isMostPopular ? V + "60" : pkg.isBestValue ? "rgba(251,191,36,0.4)" : BORDER,
@@ -193,7 +193,7 @@ function CoinPackageCard({ pkg, onBuy, isActing, usdBalance }: {
     >
       {/* Top badge */}
       {(pkg.isMostPopular || pkg.isBestValue) && (
-        <div className="absolute top-0 left-0 right-0 flex justify-center -translate-y-0">
+        <div className="absolute top-0 left-0 right-0 flex justify-center translate-y-0">
           <span className="text-[8px] font-black uppercase tracking-widest px-3 py-1 rounded-b-lg"
             style={{
               background: pkg.isMostPopular ? GRAD : "rgba(251,191,36,0.8)",
@@ -280,7 +280,7 @@ function TxRow({ tx }: { tx: Transactions }) {
 
   return (
     <div className="flex items-center gap-3 py-3 border-b" style={{ borderColor: "rgba(124,58,237,0.08)" }}>
-      <div className="size-9 rounded-xl flex items-center justify-center text-[16px] flex-shrink-0"
+      <div className="size-9 rounded-xl flex items-center justify-center text-[16px] shrink-0"
         style={{ background: meta.color + "15" }}>
         {meta.icon}
       </div>
@@ -298,7 +298,7 @@ function TxRow({ tx }: { tx: Transactions }) {
         </div>
       </div>
 
-      <p className="text-[13px] font-black flex-shrink-0"
+      <p className="text-[13px] font-black shrink-0"
         style={{ color: isCredit ? "#4ade80" : P }}>
         {isCredit ? "+" : "-"}
         {isCoins
@@ -356,7 +356,7 @@ function CryptoModal({ address, amount, currency, expiresAt, onClose }: {
               style={{ background: "rgba(255,255,255,0.03)", borderColor: BORDER }}>
               <p className="flex-1 text-[11px] font-mono text-[#f0eaff] break-all leading-relaxed">{address}</p>
               <button onClick={() => copy(address)}
-                className="flex-shrink-0 rounded-lg px-2.5 py-1.5 text-[10px] font-black border transition-all"
+                className="shrink-0 rounded-lg px-2.5 py-1.5 text-[10px] font-black border transition-all"
                 style={{
                   background: copied ? "rgba(34,197,94,0.15)" : "rgba(124,58,237,0.1)",
                   borderColor: copied ? "rgba(34,197,94,0.3)" : BORDER,
@@ -370,7 +370,7 @@ function CryptoModal({ address, amount, currency, expiresAt, onClose }: {
           {/* Warning */}
           <div className="rounded-xl border px-3 py-2.5 flex items-start gap-2"
             style={{ background: "rgba(251,191,36,0.06)", borderColor: "rgba(251,191,36,0.2)" }}>
-            <span className="text-[14px] flex-shrink-0 mt-0.5">⚠️</span>
+            <span className="text-[14px] shrink-0 mt-0.5">⚠️</span>
             <p className="text-[10px]" style={{ color: "rgba(240,234,255,0.55)" }}>
               Send the exact amount shown. Your balance will be credited automatically after network confirmation.
               {expiresAt && ` Invoice expires at ${new Date(expiresAt).toLocaleTimeString()}.`}
@@ -460,7 +460,7 @@ function DepositModal({ onDeposit, isActing, onClose }: {
           <div className="flex gap-3 pt-1">
             <GradBtn variant="ghost" onClick={onClose} className="flex-1">Cancel</GradBtn>
             <GradBtn onClick={() => onDeposit(amountCents, method, method === "crypto" ? crypto : undefined)}
-              disabled={!valid || isActing} className="flex-[2]">
+              disabled={!valid || isActing} className="flex-2">
               {isActing ? "Processing…" : method === "card" ? "Continue to Payment" : "Generate Invoice"}
             </GradBtn>
           </div>
@@ -563,7 +563,7 @@ function WithdrawModal({ balance, onWithdraw, isActing, onClose }: {
 
           <div className="flex gap-3">
             <GradBtn variant="ghost" onClick={onClose} className="flex-1">Cancel</GradBtn>
-            <GradBtn onClick={submit} disabled={!valid || isActing} className="flex-[2]">
+            <GradBtn onClick={submit} disabled={!valid || isActing} className="flex-2">
               {isActing ? "Processing…" : "Submit Withdrawal"}
             </GradBtn>
           </div>
@@ -657,7 +657,7 @@ export default function WalletDashboard() {
 
   if (isLoading) return (
     <div className="flex flex-col gap-4 animate-pulse">
-      <div className="h-40 rounded-[20px]" style={{ background: CARD }} />
+      <div className="h-40 rounded-4xl" style={{ background: CARD }} />
       <div className="grid grid-cols-4 gap-3">
         {[...Array(4)].map((_, i) => <div key={i} className="h-16 rounded-[14px]" style={{ background: CARD }} />)}
       </div>
@@ -721,7 +721,7 @@ export default function WalletDashboard() {
                 View all →
               </button>
             </div>
-            <div className="rounded-[16px] border px-4"
+            <div className="rounded-3xl border px-4"
               style={{ background: CARD, borderColor: BORDER }}>
               {transactions.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-10">
@@ -797,7 +797,7 @@ export default function WalletDashboard() {
       {/* ── Transaction History ── */}
       {activeTab === "history" && (
         <div className="flex flex-col gap-4">
-          <div className="rounded-[16px] border px-4"
+          <div className="rounded-3xl border px-4"
             style={{ background: CARD, borderColor: BORDER }}>
             {transactions.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-16">

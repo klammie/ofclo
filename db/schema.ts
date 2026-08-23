@@ -22,6 +22,7 @@ export const user = pgTable("user", {
   password: text("password"),
   emailVerified: boolean("email_verified").notNull().default(false),
   image:         text("image"),
+  onboardingCompleted: boolean("onboarding_completed").notNull().default(false),
   // ── BetterAuth admin plugin adds this column ──────────────────────────────
   role:          text("role").default("user"),   // "admin" | "agency" | "creator" | "user"
   banned:        boolean("banned").default(false),
@@ -351,6 +352,25 @@ export const payouts = pgTable("payouts", {
   statusIdx:    index("payouts_status_idx").on(t.status),
 }));
 
+export const maxelpaySessions = pgTable("maxelpay_sessions", {
+  id:            uuid("id").defaultRandom().primaryKey(),
+  sessionId:     text("session_id").notNull().unique(),       // MaxelPay's sessionId
+  orderId:       text("order_id").notNull().unique(),         // our internal orderId, sent to MaxelPay
+  userId:        text("user_id").notNull().references(() => user.id),
+  purpose:       text("purpose").notNull(),                    // "coin_purchase" | "subscription" | "deposit"
+  // Links to whichever flow created this session
+  linkedTxId:    text("linked_tx_id"),                         // walletTransactions.id
+  linkedSubId:   uuid("linked_sub_id"),                        // subscriptions.id
+  amountCents:   integer("amount_cents").notNull(),
+  status:        text("status").notNull().default("pending"),  // pending | paid | partial | overpaid | expired | failed
+  metadata:      text("metadata"),                              // JSON string
+  createdAt:     timestamp("created_at").notNull().defaultNow(),
+  updatedAt:     timestamp("updated_at").notNull().defaultNow(),
+}, t => ({
+  userIdIdx:    index("maxelpay_sessions_user_id_idx").on(t.userId),
+  statusIdx:    index("maxelpay_sessions_status_idx").on(t.status),
+}));
+
 // ── reports ───────────────────────────────────────────────────────────────────
 export const reports = pgTable("reports", {
   id:                uuid("id").defaultRandom().primaryKey(),
@@ -597,28 +617,64 @@ export const postsRelations = relations(posts, ({ one, many }) => ({
 }));
 
 
-// Creator Campaigns/Goals Table
+export const campaignStatusEnum = pgEnum("campaign_status", [
+  "draft",      // being set up, not visible to fans yet
+  "active",     // live and accepting pledges
+  "funded",     // goal amount reached
+  "expired",    // deadline passed without reaching goal
+  "cancelled",  // creator/agency pulled it
+]);
+ 
+// ─── Campaigns ──────────────────────────────────────────────────────────────
 export const campaigns = pgTable("campaigns", {
   id:              uuid("id").defaultRandom().primaryKey(),
   creatorId:       uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+ 
+  // Who actually created it — same flow for creator vs agency, just attribution
+  createdByUserId: text("created_by_user_id").notNull().references(() => user.id),
+  createdByRole:   text("created_by_role").notNull().default("creator"), // "creator" | "agency"
+ 
   title:           text("title").notNull(),
   description:     text("description").notNull(),
+  coverImageUrl:   text("cover_image_url"),
+ 
   goalAmount:      decimal("goal_amount", { precision: 10, scale: 2 }).notNull(),
-  currentAmount:   decimal("current_amount", { precision: 10, scale: 2 }).notNull().default("0.00"),
-  currency:        text("currency").notNull().default("USD"),
-  deadline:        timestamp("deadline"), // Optional deadline
-  status:          text("status").notNull().default("active"), // 'active', 'completed', 'cancelled'
-  imageUrl:        text("image_url"),
-  donorCount:      integer("donor_count").notNull().default(0),
-  topDonorId:      text("top_donor_id").references(() => user.id),
-  topDonorAmount:  decimal("top_donor_amount", { precision: 10, scale: 2 }).default("0.00"),
+  raisedAmount:    decimal("raised_amount", { precision: 10, scale: 2 }).notNull().default("0"),
+  pledgerCount:    integer("pledger_count").notNull().default(0),
+ 
+  status:          campaignStatusEnum("status").notNull().default("draft"),
+  deadline:        timestamp("deadline").notNull(),
+ 
   createdAt:       timestamp("created_at").notNull().defaultNow(),
   updatedAt:       timestamp("updated_at").notNull().defaultNow(),
-  completedAt:     timestamp("completed_at"),
-}, t => ({
-  creatorIdx: index("campaigns_creator_idx").on(t.creatorId),
-  statusIdx:  index("campaigns_status_idx").on(t.status),
+}, (t) => ({
+  creatorIdx:   index("campaigns_creator_idx").on(t.creatorId),
+  statusIdx:    index("campaigns_status_idx").on(t.status),
+  deadlineIdx:  index("campaigns_deadline_idx").on(t.deadline),
 }));
+ 
+// ─── Campaign Pledges ─────────────────────────────────────────────────────────
+// One-time payments — no tiers, no recurring rewards. Just an amount + message.
+export const campaignPledges = pgTable("campaign_pledges", {
+  id:           uuid("id").defaultRandom().primaryKey(),
+  campaignId:   uuid("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  userId:       text("user_id").notNull().references(() => user.id),
+ 
+  amount:       decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  message:      text("message"),              // optional supporter note
+  isAnonymous:  boolean("is_anonymous").notNull().default(false),
+ 
+  paymentStatus: text("payment_status").notNull().default("completed"), // wire to your payment provider statuses
+  paymentRef:    text("payment_ref"),
+ 
+  createdAt:    timestamp("created_at").notNull().defaultNow(),
+}, (t) => ({
+  campaignIdx: index("pledges_campaign_idx").on(t.campaignId),
+  userIdx:     index("pledges_user_idx").on(t.userId),
+}));
+ 
+export type CampaignRow = typeof campaigns.$inferSelect;
+export type CampaignPledgeRow = typeof campaignPledges.$inferSelect;
 
 // Campaign Donations Table
 export const campaignDonations = pgTable("campaign_donations", {
@@ -857,6 +913,24 @@ export const userInventory = pgTable("user_inventory", {
   source:            text("source").default("purchased"), // "purchased" | "mystery_box" | "fan_pass" | "quest"
   updatedAt:         timestamp("updated_at").defaultNow(),
 });
+
+// ─── Post Gifts ─────────────────────────────────────────────────────────────
+export const postGifts = pgTable("post_gifts", {
+  id:          serial("id").primaryKey(),
+  postId:      text("post_id").notNull(),           // FK → posts.id
+  senderId:    text("sender_id").notNull(),          // FK → user.id
+  recipientId: text("recipient_id").notNull(),       // creator's userId
+  itemId:      text("item_id").notNull(),            // FK → shop_items.id
+  icon:        text("icon").notNull(),
+  name:        text("name").notNull(),
+  rarity:      text("rarity").notNull().default("common"),
+  sentAt:      timestamp("sent_at").defaultNow().notNull(),
+}, (t) => ({
+  postIdIdx:   index("post_gifts_post_id_idx").on(t.postId),
+  senderIdx:   index("post_gifts_sender_idx").on(t.senderId),
+}));
+
+
  
 // ─── Purchase Log ─────────────────────────────────────────────────────────────
  
@@ -1462,3 +1536,102 @@ export type SeasonTask          = typeof seasonTasks.$inferSelect;
 export type UserWeeklyTask      = typeof userWeeklyTasks.$inferSelect;
 export type UserSeasonProgress  = typeof userSeasonProgress.$inferSelect;
 export type RewardClaim         = typeof rewardClaims.$inferSelect;
+
+
+
+// ─── Quest action types — used to match incoming user actions to quest types ──
+export const questActionEnum = pgEnum("quest_action_type", [
+  "like_post",
+  "comment_post",
+  "send_gift",
+  "view_post",
+  "subscribe",
+  "login",
+  "bookmark_post",
+  "share_post",
+]);
+ 
+// ─── Status XP source — where did this XP come from, for auditing/analytics ──
+export const xpSourceEnum = pgEnum("xp_source", [
+  "fan_pass_quest",
+  "fan_pass_levelup",
+  "login_bonus",
+  "milestone",
+  "gift_sent",
+  "subscription",
+  "admin_grant",
+]);
+ 
+// ─── User Quest Progress ───────────────────────────────────────────────────────
+// One row per (user, task). Incremented as the user performs the matching action.
+// When current >= target, isCompleted flips true and the reward is auto-applied.
+export const userQuestProgress = pgTable("user_quest_progress", {
+  id:          serial("id").primaryKey(),
+  userId:      text("user_id").notNull(),
+  seasonId:    integer("season_id").notNull(),
+  taskId:      integer("task_id").notNull(),       // references seasonTasks.id
+  actionType:  questActionEnum("action_type").notNull(),
+  current:     integer("current").notNull().default(0),
+  target:      integer("target").notNull().default(1),
+  isCompleted: boolean("is_completed").notNull().default(false),
+  completedAt: timestamp("completed_at"),
+  rewardClaimed: boolean("reward_claimed").notNull().default(false),
+  // Reset key — e.g. "2026-06-19" for daily quests, so progress resets when
+  // the daily rotation picks a new quest set
+  resetKey:    text("reset_key").notNull(),
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
+  updatedAt:   timestamp("updated_at").notNull().defaultNow(),
+}, (t) => ({
+  userTaskResetIdx: uniqueIndex("quest_progress_user_task_reset_idx")
+    .on(t.userId, t.taskId, t.resetKey),
+  userSeasonIdx: index("quest_progress_user_season_idx").on(t.userId, t.seasonId),
+}));
+ 
+// ─── Status XP Log ──────────────────────────────────────────────────────────────
+// Every XP-earning event writes a row here. The user's total statusXp
+// (used for Explorer/Supporter/Fanatic/Presidential tier) is the SUM of all
+// rows for that user — so Fan Pass participation directly feeds overall status.
+export const statusXpLog = pgTable("status_xp_log", {
+  id:        serial("id").primaryKey(),
+  userId:    text("user_id").notNull(),
+  amount:    integer("amount").notNull(),
+  source:    xpSourceEnum("source").notNull(),
+  sourceRef: text("source_ref"),     // e.g. taskId, seasonId, giftId — for traceability
+  note:      text("note"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => ({
+  userIdIdx: index("status_xp_log_user_id_idx").on(t.userId),
+}));
+ 
+// ─── Featured Creator Reward Media ──────────────────────────────────────────────
+// When a user claims a reward of type "exclusive_content", we randomly pick one
+// of the featured creator's locked/PPV posts and lock that choice in here so
+// re-opening the reward always shows the SAME post (no re-roll on every view).
+export const featuredCreatorRewardMedia = pgTable("featured_creator_reward_media", {
+  id:        serial("id").primaryKey(),
+  userId:    text("user_id").notNull(),
+  seasonId:  integer("season_id").notNull(),
+  rewardId:  integer("reward_id").notNull(),   // references passRewardTrack.id
+  postId:    uuid("post_id").notNull(),        // references posts.id — the randomly chosen post
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => ({
+  userRewardIdx: uniqueIndex("featured_media_user_reward_idx").on(t.userId, t.rewardId),
+}));
+
+export const fanPassVipMembers = pgTable("fan_pass_vip_members", {
+  id:           serial("id").primaryKey(),
+  userId:       text("user_id").notNull(),
+  seasonId:     integer("season_id").notNull(),
+  purchasedAt:  timestamp("purchased_at").notNull().defaultNow(),
+  expiresAt:    timestamp("expires_at"),       // null = lasts until season ends
+  paymentRef:   text("payment_ref"),           // order id / transaction reference
+}, (t) => ({
+  userSeasonIdx: uniqueIndex("fanpass_vip_user_season_idx").on(t.userId, t.seasonId),
+  }));
+ 
+export type UserQuestProgressRow   = typeof userQuestProgress.$inferSelect;
+export type StatusXpLogRow         = typeof statusXpLog.$inferSelect;
+export type FeaturedRewardMediaRow = typeof featuredCreatorRewardMedia.$inferSelect;
+export type FanPassVipMemberRow    = typeof fanPassVipMembers.$inferSelect;
+
+

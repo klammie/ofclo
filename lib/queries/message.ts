@@ -39,63 +39,77 @@ export type MessageWithSender = {
 /**
  * Get all conversations for a user
  */
+
 export async function getUserConversations(
   userId: string
 ): Promise<ConversationWithUser[]> {
+  
   const rows = await db.execute<{
-    conversation_id: string;
-    other_user_id: string;
-    other_user_name: string;
-    other_user_username: string | null;
-    other_user_avatar: string | null;
-    last_message_content: string | null;
-    last_message_at: Date | null;
-    last_message_sender_id: string | null;   // 👈 add this to your SELECT
-    unread_count: number;
-    updated_at: Date;
+    conversation_id:        string;
+    other_user_id:          string;
+    other_user_name:        string;
+    other_user_username:    string | null;
+    other_user_avatar:      string | null;
+    last_message_content:   string | null;
+    last_message_at:        Date   | null;
+    last_message_sender_id: string | null;
+    unread_count:           number;
+    updated_at:             Date;
   }>(sql`
-    SELECT 
+    SELECT
       c.id as conversation_id,
-      CASE 
+      CASE
         WHEN c.participant1_id = ${userId} THEN c.participant2_id
         ELSE c.participant1_id
       END as other_user_id,
-      u.name as other_user_name,
+      u.name  as other_user_name,
       p.username as other_user_username,
       p.avatar_url as other_user_avatar,
-      c.last_message_content,
-      c.last_message_at,
-      c.last_message_sender_id,   -- 👈 make sure this column exists in your schema
-      CASE 
+
+      -- Pull last message directly from messages table — always accurate
+      m.content   as last_message_content,
+      m.created_at as last_message_at,
+      m.from_user_id as last_message_sender_id,
+
+      CASE
         WHEN c.participant1_id = ${userId} THEN c.unread_count_user1
         ELSE c.unread_count_user2
       END as unread_count,
       c.updated_at
     FROM ${conversations} c
     JOIN ${user} u ON (
-      CASE 
+      CASE
         WHEN c.participant1_id = ${userId} THEN c.participant2_id
         ELSE c.participant1_id
       END = u.id
     )
     LEFT JOIN ${profiles} p ON u.id = p.id
+    -- Join to the actual last message row
+    LEFT JOIN LATERAL (
+      SELECT content, created_at, from_user_id
+      FROM messages
+      WHERE (from_user_id = c.participant1_id AND to_user_id = c.participant2_id)
+         OR (from_user_id = c.participant2_id AND to_user_id = c.participant1_id)
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) m ON true
     WHERE c.participant1_id = ${userId} OR c.participant2_id = ${userId}
-    ORDER BY c.last_message_at DESC
+    ORDER BY COALESCE(m.created_at, c.updated_at) DESC
   `);
 
-  return rows.rows.map(row => ({
-    conversationId: row.conversation_id,
+  return rows.rows.map((row) => ({
+    conversationId:      row.conversation_id,
     otherUser: {
-      id: row.other_user_id,
-      name: row.other_user_name,
-      username: row.other_user_username || row.other_user_name.toLowerCase().replace(/\s+/g, ''),
+      id:        row.other_user_id,
+      name:      row.other_user_name,
+      username:  row.other_user_username ?? row.other_user_name.toLowerCase().replace(/\s+/g, ""),
       avatarUrl: row.other_user_avatar,
     },
-    lastMessageContent: row.last_message_content,     // 👈 flatten
-    lastMessageAt: row.last_message_at,               // 👈 flatten
-    lastMessageSenderId: row.last_message_sender_id,  // 👈 flatten
-    unreadCount: row.unread_count,
-    updatedAt: row.updated_at,
+    lastMessageContent:  row.last_message_content,
+    lastMessageAt:       row.last_message_at,
+    lastMessageSenderId: row.last_message_sender_id,
+    unreadCount:         row.unread_count,
+    updatedAt:           row.updated_at,
   }));
 }
 

@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { posts, creators } from "@/db/schema";
-import { eq, and, lte } from "drizzle-orm";
+import { eq, and, lte, sql } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   // Verify cron secret (for security)
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
 
     let publishedCount = 0;
 
-    for (const post of duePosts) {
+    for (const post of duePost) {
       // Publish post
       await db
         .update(posts)

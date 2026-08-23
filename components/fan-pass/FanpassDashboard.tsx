@@ -1,479 +1,315 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { getLevelFromXp } from "@/lib/xp";
-import { getMockQuests, getMockRewardTrack, getMockLeaderboard } from "@/lib/fanpass-mock"
-import type { Quest, RewardNode, LeaderboardEntry,  } from "@/lib/fanpass-mock";
-import { useLoginBonus, formatCountdown } from "@/lib/hooks/use-login-bonus";
 
-// ─── Tiny utility ─────────────────────────────────────────────────────────────
+// Inline badge colour — replaces the missing levelBadgeColor export
+function levelBadgeColor(level: number): string {
+  if (level >= 50) return "#fbbf24"; // legendary gold
+  if (level >= 35) return "#a78bfa"; // epic purple
+  if (level >= 20) return "#38bdf8"; // rare blue
+  if (level >= 10) return "#4ade80"; // green
+  if (level >= 5)  return "#7c3aed"; // purple
+  return "#94a3b8";                  // common grey
+}
+import type {
+  FansPassTab,
+  DashboardUser,
+  InitialPassData,
+  PassLevel,
+} from "@/types/fans-pass";
+import type {
+  LiveSeason,
+  LiveReward,
+  LiveDayConfig,
+  LiveMilestone,
+  LiveLeaderboardEntry,
+} from "@/lib/fan-pass-live.service";
+
+import OverviewTab    from "./tabs/OverviewTab";
+import RewardsTab     from "./tabs/RewardsTab";
+import QuestsTab      from "./tabs/QuestsTab";
+import LeaderboardTab from "./tabs/LeaderboardTab";
+import {LoginBonusPanel} from "./LoginBonusPanel";
+import { LevelUpOverlay } from "./LevelUpOverlay";
+
 function cn(...c: (string | boolean | undefined | null)[]) {
   return c.filter(Boolean).join(" ");
 }
 
-// ─── Theme constants ──────────────────────────────────────────────────────────
-const P   = "#ef3976";   // pink primary
-const V   = "#7c3aed";   // violet secondary
-const GRAD = `linear-gradient(135deg, ${V} 0%, ${P} 100%)`;
-const BG   = "#0d0d1a";
-const SURF = "#13112b";
-const CARD = "#1a1635";
-
-// ─── Glass card primitive ─────────────────────────────────────────────────────
-function GlassCard({ children, className, style, onClick }: {
-  children: React.ReactNode;
-  className?: string;
-  style?: React.CSSProperties;
-  onClick?: () => void;
-}) {
-  return (
-    <div
-      onClick={onClick}
-      className={cn("rounded-2xl border transition-all duration-200", className)}
-      style={{
-        background: CARD,
-        borderColor: "rgba(124,58,237,0.2)",
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-// ─── Gradient text ────────────────────────────────────────────────────────────
-function GradText({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <span
-      className={cn("font-black", className)}
-      style={{ background: GRAD, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}
-    >
-      {children}
-    </span>
-  );
-}
-
-// ─── Quest card ───────────────────────────────────────────────────────────────
-function QuestCard({ quest }: { quest: Quest }) {
-  return (
-    <div
-      className="rounded-xl p-3 border"
-      style={{
-        background: quest.completed ? "rgba(124,58,237,0.05)" : "rgba(255,255,255,0.03)",
-        borderColor: quest.completed ? "rgba(124,58,237,0.3)" : "rgba(124,58,237,0.1)",
-      }}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p className={cn(
-          "text-[12px] font-semibold",
-          quest.completed ? "line-through opacity-50" : "text-[#f0eaff]"
-        )}>
-          {quest.title}
-        </p>
-        {quest.completed
-          ? <span className="size-5 rounded-full bg-green-500 flex items-center justify-center text-[9px] text-white font-black shrink-0">✓</span>
-          : <span className="text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ background: "rgba(239,57,118,0.15)", color: P }}>
-              +{quest.xpReward} XP
-            </span>
-        }
-      </div>
-      {!quest.completed && quest.target > 1 && (
-        <div className="mt-2">
-          <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(124,58,237,0.15)" }}>
-            <div className="h-full rounded-full" style={{ width: `${quest.progress}%`, background: GRAD }} />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Reward track node ────────────────────────────────────────────────────────
-function RewardNodeRow({ node, isCurrentLevel }: { node: RewardNode; isCurrentLevel: boolean }) {
-  const free = node.free;
-  const vip  = node.vip;
-
-  return (
-    <div className="flex items-center justify-between gap-3">
-      {/* Free side */}
-      <div className="flex-1 flex justify-end">
-        {free && (
-          <div
-            className={cn(
-              "flex flex-col items-center gap-1.5 p-3 rounded-2xl border w-28",
-              free.claimed && "opacity-60"
-            )}
-            style={{
-              background: free.claimed ? "rgba(34,197,94,0.08)" : free.available ? "rgba(124,58,237,0.08)" : "rgba(255,255,255,0.02)",
-              borderColor: free.claimed ? "rgba(34,197,94,0.3)" : free.available ? "rgba(124,58,237,0.2)" : "rgba(255,255,255,0.05)",
-            }}
-          >
-            {free.claimed && (
-              <div className="absolute -top-1.5 -right-1.5 size-4 bg-green-500 rounded-full flex items-center justify-center text-[8px] text-white font-black">✓</div>
-            )}
-            <div className="size-12 rounded-xl flex items-center justify-center text-2xl relative"
-              style={{ background: free.claimed ? "rgba(34,197,94,0.15)" : "rgba(124,58,237,0.12)" }}>
-              {free.icon}
-            </div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-center"
-              style={{ color: free.claimed ? "#4ade80" : "rgba(240,234,255,0.6)" }}>
-              {free.label}
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Level pill */}
-      <div
-        className="shrink-0 size-12 rounded-full flex items-center justify-center text-[13px] font-black border-4 z-10"
-        style={
-          isCurrentLevel
-            ? { background: GRAD, borderColor: BG, color: "#fff", boxShadow: `0 0 0 4px rgba(239,57,118,0.25)` }
-            : node.level < 15
-            ? { background: "rgba(239,57,118,0.5)", borderColor: BG, color: "#fff" }
-            : { background: SURF, borderColor: "rgba(124,58,237,0.2)", color: "rgba(240,234,255,0.3)" }
-        }
-      >
-        {node.level}
-      </div>
-
-      {/* VIP side */}
-      <div className="flex-1 flex justify-start">
-        {vip && (
-          <div
-            className="relative flex flex-col items-center gap-1.5 p-3 rounded-2xl border w-28"
-            style={{
-              background: vip.available && !vip.claimed ? "rgba(239,57,118,0.1)" : "rgba(255,255,255,0.02)",
-              borderColor: vip.available && !vip.claimed ? "rgba(239,57,118,0.4)" : "rgba(124,58,237,0.12)",
-              boxShadow: vip.available && !vip.claimed ? `0 0 16px rgba(239,57,118,0.15)` : "none",
-            }}
-          >
-            {!vip.available && (
-              <span className="absolute -top-2 -right-2 text-[#ef3976] text-[13px]">🔒</span>
-            )}
-            {vip.available && !vip.claimed && (
-              <span
-                className="absolute -top-2 -right-2 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wider animate-pulse"
-                style={{ background: P, color: "#fff" }}
-              >
-                Available
-              </span>
-            )}
-            <div className="size-12 rounded-xl flex items-center justify-center text-2xl"
-              style={{ background: vip.available ? "rgba(239,57,118,0.2)" : "rgba(124,58,237,0.06)" }}>
-              {vip.icon}
-            </div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-center"
-              style={{ color: vip.available ? P : "rgba(240,234,255,0.3)" }}>
-              {vip.label}
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+const TABS: { id: FansPassTab; label: string; icon: string }[] = [
+  { id: "overview",    label: "Overview",    icon: "🏠" },
+  { id: "rewards",     label: "Rewards",     icon: "🎁" },
+  { id: "quests",      label: "Quests",      icon: "🎯" },
+  { id: "login-bonus", label: "Daily Bonus", icon: "🔥" },
+  { id: "leaderboard", label: "Leaderboard", icon: "🏆" },
+];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
+
 interface FansPassDashboardProps {
-  seasonId?: number;
-  user: { id: string; name: string; image: string | null; isVip: boolean };
-  initialXp?: number;
-  initialStreak?: number;
-  initialCoins?: number;
+  season:              LiveSeason;
+  initialPassData:     InitialPassData & { currentDaySlot?: number };
+  initialRewards:      LiveReward[];
+  initialDayConfig:    LiveDayConfig[];
+  initialMilestones:   LiveMilestone[];
+  initialLeaderboard:  LiveLeaderboardEntry[];
+  user:                DashboardUser;
 }
 
-// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export default function FansPassDashboard({
-  seasonId = 1,
+  season,
+  initialPassData,
+  initialRewards,
+  initialDayConfig,
+  initialMilestones,
+  initialLeaderboard,
   user,
-  initialXp = 1500,
-  initialStreak = 5,
-  initialCoins = 28500,
 }: FansPassDashboardProps) {
-  const passLevel = getLevelFromXp(initialXp);
-  const quests    = getMockQuests();
-  const rewards   = getMockRewardTrack(passLevel.level);
-  const leaders   = getMockLeaderboard(user.id);
+  const [activeTab, setActiveTab] = useState<FansPassTab>("overview");
+  const [passData, setPassData]   = useState(initialPassData);
+  const [rewards, setRewards]     = useState(initialRewards);
 
-  const [activeQuestTab, setActiveQuestTab] = useState<"daily" | "weekly">("daily");
-  const dailyQuests  = quests.filter(q => q.category === "daily");
-  const weeklyQuests = quests.filter(q => q.category === "weekly");
-  const shownQuests  = activeQuestTab === "daily" ? dailyQuests : weeklyQuests;
+  const passLevel: PassLevel = getLevelFromXp(passData.totalXpEarned);
+  const badgeColor = levelBadgeColor(passLevel.level);
 
-  // Login bonus hook for the streak state in the header
-  const { data: bonusData } = useLoginBonus(seasonId);
-  const streak = bonusData?.currentStreak ?? initialStreak;
-  const canClaim = bonusData?.canClaimToday ?? false;
+  // Re-fetch pass data after login bonus claim
+  async function refreshPassData() {
+    try {
+      const res = await fetch(`/api/fan-pass/season?refresh=1`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setPassData((prev) => ({
+        ...prev,
+        currentStreak:    data.currentStreak,
+        totalXpEarned:    data.totalXpEarned,
+        totalCoinsEarned: data.totalCoinsEarned,
+        longestStreak:    data.longestStreak,
+        streakFreezes:    data.streakFreezes,
+        currentDaySlot:   data.currentDaySlot,
+      }));
+      // Refresh rewards so newly unlocked ones show available
+      if (data.rewards) setRewards(data.rewards);
+    } catch {}
+  }
 
   return (
-    <div className="w-full"
-  style={{ fontFamily: "'Be Vietnam Pro', sans-serif", color: "#f0eaff" }}>
-      {/* ── Top header bar (matches screenshot 1 layout) ── */}
-<div className="flex items-center justify-between px-6 py-4 border-b"
-  style={{ borderColor: "rgba(124,58,237,0.12)" }}>
-  <div className="flex items-center gap-3">
-    <span className="text-[20px]">🏆</span>
-    <div>
-      <h1 className="text-[18px] font-black text-[#f0eaff] leading-none">Fans Pass</h1>
-      <p className="text-[11px] mt-0.5" style={{ color: "rgba(240,234,255,0.4)" }}>
-        Level {passLevel.level} · {initialXp.toLocaleString()} XP
-      </p>
-    </div>
-  </div>
-  {user.isVip ? (
-    <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-black border"
-      style={{ background: "rgba(239,57,118,0.1)", borderColor: "rgba(239,57,118,0.3)", color: P }}>
-      💎 VIP
-    </div>
-  ) : (
-    <button className="rounded-full px-4 py-1.5 text-[12px] font-black text-white"
-      style={{ background: GRAD }}>
-      Premium
-    </button>
-  )}
-</div>
+    <div
+      className="min-h-screen w-full"
+      style={{ background: "#0d0d1a", fontFamily: "'Be Vietnam Pro', sans-serif" }}
+    >
+      {/* Level-up celebration — fires automatically when passLevel.level increases */}
+      <LevelUpOverlay passLevel={passLevel} seasonId={season.id} />
 
-      {/* ── 3-column layout (mirrors screenshot 1 exactly) ── */}
-      <div className="flex h-[calc(100vh-130px)] overflow-hidden">
+      {/* ── Page header ── */}
+      <div className="relative overflow-hidden border-b border-[rgba(124,58,237,0.12)] px-4 sm:px-8 pt-5 sm:pt-8 pb-5 sm:pb-6">
+        {/* Glow */}
+        <div
+          className="absolute -top-20 left-1/2 -translate-x-1/2 w-[600px] h-[200px] pointer-events-none"
+          style={{ background: "radial-gradient(ellipse, rgba(124,58,237,0.12) 0%, transparent 70%)" }}
+        />
 
-        {/* ══ LEFT SIDEBAR: Active Quests ══ */}
-        <aside
-          className="hidden lg:flex w-80 flex-col gap-5 border-r overflow-y-auto p-5"
-          style={{ borderColor: "rgba(124,58,237,0.1)", background: "rgba(19,17,43,0.6)" }}
-        >
-          {/* Quest header */}
-          <div>
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-[14px]">📋</span>
-              <h2 className="text-[14px] font-black text-[#f0eaff]">Active Quests</h2>
-            </div>
+        <div className="relative z-10 max-w-4xl mx-auto">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
 
-            {/* Category tabs */}
-            <div className="flex gap-1.5 mb-4">
-              {(["daily", "weekly"] as const).map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => setActiveQuestTab(cat)}
-                  className="flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all"
-                  style={
-                    activeQuestTab === cat
-                      ? { background: "rgba(239,57,118,0.15)", borderColor: "rgba(239,57,118,0.4)", color: P }
-                      : { background: "rgba(124,58,237,0.05)", borderColor: "rgba(124,58,237,0.12)", color: "rgba(240,234,255,0.4)" }
-                  }
+            {/* Title block — live season name + real days left */}
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/30">
+                  {season.name}
+                </span>
+                <span className="text-white/15">·</span>
+                <span
+                  className="text-[10px] font-black uppercase tracking-[0.16em]"
+                  style={{ color: season.daysLeft <= 3 ? "#ef3976" : "#7c3aed" }}
                 >
-                  {cat === "daily" ? "⏱ Daily" : "📅 Weekly"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Quest list */}
-          <div className="flex flex-col gap-2.5">
-            {/* Reset timer */}
-            {activeQuestTab === "daily" && (
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[9px] font-bold uppercase tracking-widest text-[#f0eaff]/30">⏱ Daily</span>
-                <span className="text-[9px] font-bold" style={{ color: P }}>12h Left</span>
+                  {season.daysLeft === 0 ? "Ends today" : `${season.daysLeft} days left`}
+                </span>
               </div>
-            )}
-
-            {shownQuests.map((q) => <QuestCard key={q.id} quest={q} />)}
-          </div>
-
-          {/* Streak status */}
-          <GlassCard className="p-4 mt-2">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-[16px]">🔥</span>
-              <span className="text-[12px] font-black text-[#f0eaff]">{streak}-Day Streak</span>
-            </div>
-            <div className="h-1 rounded-full overflow-hidden mb-2" style={{ background: "rgba(124,58,237,0.15)" }}>
-              <div className="h-full rounded-full" style={{ width: `${(streak / 7) * 100}%`, background: GRAD }} />
-            </div>
-            {canClaim && (
-              <a href="#login-bonus" className="block w-full text-center py-2 rounded-xl text-[11px] font-black text-white"
-                style={{ background: GRAD }}>
-                Claim Today&apos;s Bonus!
-              </a>
-            )}
-          </GlassCard>
-
-          {/* VIP upsell card */}
-          {!user.isVip && (
-            <div
-              className="relative mt-auto rounded-2xl p-5 overflow-hidden"
-              style={{ background: GRAD }}
-            >
-              <div className="absolute -right-4 -bottom-4 text-[60px] opacity-15 pointer-events-none">💎</div>
-              <p className="text-[8px] font-black uppercase tracking-widest text-white/70 mb-1">Unlock More</p>
-              <h3 className="text-[15px] font-black text-white leading-tight mb-2">
-                Unlock 50+ Premium Rewards
-              </h3>
-              <p className="text-[11px] text-white/80 mb-3">
-                Get exclusive badges, emotes, and direct messaging priority.
+              <h1 className="text-[22px] sm:text-[32px] font-black text-white tracking-tight leading-none">
+                Fans Pass
+              </h1>
+              <p className="text-[12px] text-white/40 mt-1">
+                {season.description || "Earn XP, unlock rewards, climb the leaderboard"}
               </p>
-              <button className="w-full py-2 rounded-xl text-[12px] font-black bg-white"
-                style={{ color: V }}>
-                Upgrade Now
-              </button>
             </div>
-          )}
-        </aside>
 
-        {/* ══ CENTRE: Reward Track ══ */}
-        <main className="flex-1 overflow-y-auto">
-          {/* Track header */}
-          <div className="flex justify-between items-center px-8 pt-8 pb-4">
-            <div className="flex-1 text-center">
-              <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#f0eaff]/35">
-                Free Track
-              </span>
-            </div>
-            <div className="w-20" />
-            <div className="flex-1 text-center">
-              <span className="text-[10px] font-black uppercase tracking-[0.14em]" style={{ color: P }}>
-                Premium Track
-              </span>
-            </div>
-          </div>
-
-          {/* Track scroll */}
-          <div className="relative px-8 pb-16">
-            {/* Centre dashed line */}
-            <div
-              className="absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2"
-              style={{
-                background: `repeating-linear-gradient(to bottom, ${P} 0px, ${P} 8px, transparent 8px, transparent 16px)`,
-                opacity: 0.3,
-              }}
-            />
-
-            <div className="flex flex-col gap-16 relative">
-              {rewards.map((node) => (
-                <RewardNodeRow
-                  key={node.level}
-                  node={node}
-                  isCurrentLevel={node.level === passLevel.level}
-                />
-              ))}
-            </div>
-          </div>
-        </main>
-
-        {/* ══ RIGHT SIDEBAR: Stats + Leaderboard ══ */}
-        <aside
-          className="hidden xl:flex w-72 flex-col gap-5 border-l overflow-y-auto p-5"
-          style={{ borderColor: "rgba(124,58,237,0.1)", background: "rgba(19,17,43,0.6)" }}
-        >
-          {/* Progress Stats */}
-          <div>
-            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-[#f0eaff]/35 mb-4">
-              Progress Stats
-            </h2>
-
-            <div className="flex flex-col gap-3">
-              <GlassCard className="p-4">
-                <p className="text-[9px] font-black uppercase tracking-widest text-[#f0eaff]/40 mb-1">
-                  Time Remaining
-                </p>
-                <p className="text-[26px] font-black leading-none" style={{ color: P }}>14 Days</p>
-              </GlassCard>
-
-              <GlassCard className="p-4">
-                <p className="text-[9px] font-black uppercase tracking-widest text-[#f0eaff]/40 mb-1">
-                  Total XP Earned
-                </p>
-                <p className="text-[26px] font-black text-[#f0eaff] leading-none">
-                  {initialCoins.toLocaleString()}
-                </p>
-              </GlassCard>
-
-              {/* Season progress bar */}
-              <GlassCard className="p-4">
-                <div className="flex justify-between mb-2">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-[#f0eaff]/40">Season</p>
-                  <p className="text-[9px] font-bold" style={{ color: V }}>53% done</p>
-                </div>
-                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(124,58,237,0.15)" }}>
-                  <div className="h-full rounded-full" style={{ width: "53%", background: GRAD }} />
-                </div>
-              </GlassCard>
-            </div>
-          </div>
-
-          {/* Top Fans */}
-          <div>
-            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-[#f0eaff]/35 mb-4">
-              Top Fans
-            </h2>
-            <div className="flex flex-col gap-2">
-              {leaders.slice(0, 5).map((entry) => (
+            {/* Level + VIP */}
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2.5 bg-[rgba(255,255,255,0.04)] border border-white/[0.08] rounded-full px-4 py-2">
                 <div
-                  key={entry.userId}
-                  className={cn(
-                    "flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer group",
-                  )}
+                  className="size-7 rounded-full flex items-center justify-center text-[10px] font-black text-[#0d0d1a]"
+                  style={{ background: badgeColor }}
+                >
+                  {passLevel.level}
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-white">{passLevel.title}</p>
+                  <p className="text-[9px] text-white/35">
+                    {passLevel.currentXp.toLocaleString()}/{passLevel.xpForNextLevel.toLocaleString()} XP
+                  </p>
+                </div>
+              </div>
+
+              {user.isVip ? (
+                <div className="flex items-center gap-1.5 bg-[rgba(124,58,237,0.15)] border border-[rgba(124,58,237,0.35)] rounded-full px-3 py-2">
+                  <span className="text-[12px]">💎</span>
+                  <span className="text-[10px] font-black" style={{ color: "#7c3aed" }}>VIP Pass</span>
+                </div>
+              ) : (
+                <button
+                  className="text-white rounded-full px-4 py-2 text-[11px] font-black hover:opacity-90 active:scale-[0.97] transition-all"
                   style={{
-                    background: entry.isCurrentUser ? "rgba(239,57,118,0.08)" : "rgba(124,58,237,0.04)",
-                    borderColor: entry.isCurrentUser ? "rgba(239,57,118,0.3)" : "rgba(124,58,237,0.1)",
+                    background: "linear-gradient(135deg,#7c3aed,#ef3976)",
+                    boxShadow: "0 4px 16px rgba(124,58,237,0.3)",
                   }}
                 >
-                  {/* Avatar */}
-                  <div
-                    className="size-9 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 border"
-                    style={{
-                      background: entry.avatarColor + "30",
-                      borderColor: entry.avatarColor + "60",
-                      color: entry.avatarColor,
-                    }}
-                  >
-                    {entry.displayName.slice(0, 2).toUpperCase()}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-bold truncate text-[#f0eaff] group-hover:text-[#ef3976] transition-colors">
-                      {entry.isCurrentUser ? "You" : entry.displayName}
-                    </p>
-                    <p className="text-[9px] text-[#f0eaff]/40">Level {entry.level}</p>
-                  </div>
-
-                  <span
-                    className="text-[13px] font-black shrink-0"
-                    style={{ color: entry.rank === 1 ? P : "rgba(240,234,255,0.3)" }}
-                  >
-                    #{entry.rank}
-                  </span>
-                </div>
-              ))}
+                  Get VIP · {season.vipPriceCents === 0
+                    ? "Free"
+                    : `$${(season.vipPriceCents / 100).toFixed(2)}/mo`}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Daily bonus quick claim */}
-          {canClaim && (
-            <GlassCard className="p-4 mt-auto" style={{ borderColor: "rgba(239,57,118,0.3)", background: "rgba(239,57,118,0.06)" }}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-[18px]">🔥</span>
-                <div>
-                  <p className="text-[11px] font-black text-[#f0eaff]">Daily Bonus Ready!</p>
-                  <p className="text-[9px] text-[#f0eaff]/40">{streak}-day streak</p>
-                </div>
-              </div>
+          {/* Season progress bar — live % */}
+          <div className="mt-5">
+            <div className="flex justify-between items-center mb-1.5">
+              <span className="text-[9px] text-white/25 font-bold uppercase tracking-widest">
+                Season Progress
+              </span>
+              <span className="text-[9px] text-white/25">
+                {season.progressPct}% through season
+              </span>
+            </div>
+            <div className="h-1 bg-white/[0.07] rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{
+                  width: `${season.progressPct}%`,
+                  background: "linear-gradient(90deg,#7c3aed 0%,#ef3976 100%)",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Tab bar — desktop: top underline tabs, mobile: pill scroll row ── */}
+
+      {/* Desktop tabs (sm+) */}
+      <div className="hidden sm:block border-b border-[rgba(124,58,237,0.08)] px-4 sm:px-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex gap-1">
+            {TABS.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    "relative flex items-center gap-1.5 px-4 py-3 rounded-t-[10px] text-[11px] font-bold whitespace-nowrap transition-all duration-150 border-b-2",
+                    isActive
+                      ? "text-[#7c3aed] border-[#7c3aed] bg-[rgba(124,58,237,0.06)]"
+                      : "text-white/40 border-transparent hover:text-white/60 hover:bg-white/[0.03]"
+                  )}
+                >
+                  <span className="text-[13px]">{tab.icon}</span>
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile tabs (below sm) — scrollable pill row with full labels */}
+      <div className="sm:hidden px-4 py-3 border-b border-[rgba(124,58,237,0.08)]">
+        <div className="flex gap-2 overflow-x-auto pb-0.5"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}>
+          {TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
               <button
-                className="w-full py-2 rounded-xl text-[11px] font-black text-white"
-                style={{ background: GRAD }}
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className="flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-black whitespace-nowrap flex-shrink-0 transition-all duration-150 active:scale-95"
+                style={isActive
+                  ? {
+                      background:  "rgba(124,58,237,0.18)",
+                      border:      "1px solid rgba(124,58,237,0.5)",
+                      color:       "#f0eaff",
+                      boxShadow:   "0 0 10px rgba(124,58,237,0.2)",
+                    }
+                  : {
+                      background:  "rgba(255,255,255,0.04)",
+                      border:      "1px solid rgba(255,255,255,0.07)",
+                      color:       "rgba(240,234,255,0.45)",
+                    }
+                }
               >
-                Claim Now
+                <span className="text-[14px]">{tab.icon}</span>
+                <span>{tab.label}</span>
               </button>
-            </GlassCard>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Tab content ── */}
+      <div className="px-4 sm:px-8 py-4 sm:py-6">
+        <div className="max-w-4xl mx-auto">
+
+          {activeTab === "overview" && (
+            <OverviewTab
+              user={user}
+              passLevel={passLevel}
+              passData={passData}
+              season={season}
+              milestones={initialMilestones}
+              onTabChange={(tab) => setActiveTab(tab as FansPassTab)}
+            />
           )}
-        </aside>
-       
+
+          {activeTab === "rewards" && (
+            <RewardsTab
+              rewards={rewards}
+              passLevel={passLevel}
+              user={user}
+              seasonId={season.id}              // NEW — required for claim calls
+              featuredCreator={season.featuredCreator}  // NEW — from Step 4's service update
+/>
+          )}
+
+          {activeTab === "quests" && (
+            <QuestsTab
+              user={user}
+              seasonId={season.id}       // ← pass seasonId so QuestsTab can fetch live tasks
+            />
+          )}
+
+          {activeTab === "login-bonus" && (
+            <div className="max-w-lg mx-auto">
+              <LoginBonusPanel
+                seasonId={season.id}    // ← live season ID
+                dayConfig={initialDayConfig}  // ← agency-configured slots
+                className="w-full"
+                onClaim={refreshPassData}
+              />
+            </div>
+          )}
+
+          {activeTab === "leaderboard" && (
+            <LeaderboardTab
+              entries={initialLeaderboard}  // ← live from DB
+              currentUserId={user.id}
+              seasonId={season.id}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
-}
-
-// helper (avoids importing twice)
-function xpForNextFromLevel(level: number): number {
-  return Math.floor(150 * Math.pow(level, 1.4));
 }

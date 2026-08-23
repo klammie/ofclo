@@ -1,137 +1,92 @@
+// app/api/subscriptions/subscribe/route.ts
+//
+// Creates a real subscription row matching your actual schema:
+//   subscriptions (id, userId, creatorId, tier, status, priceAtSubscription,
+//                  currentPeriodStart, currentPeriodEnd, ...)
+//
+// Applies the Fan Pass VIP discount automatically when the creator is the
+// active season's featured creator and the subscriber has Fan Pass VIP.
+
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { db } from "@/db";
 import { subscriptions, creators, user } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import {
-  sendNewSubscriberEmail,
-  sendSubscriptionConfirmEmail,
-} from "@/lib/email-server";
+import { getSubscriptionPrice } from "@/lib/subscription-pricing.service";
+// import { sendNewSubscriberEmail, sendSubscriptionConfirmEmail } from "@/lib/email";
 
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await req.json().catch(() => ({}));
+  const { creatorId, tier } = body as { creatorId: string; tier: "standard" | "vip" };
+
+  if (!creatorId || !tier) {
+    return NextResponse.json({ error: "Missing creatorId or tier" }, { status: 400 });
   }
 
   try {
-    const body = await req.json().catch(() => ({}));
-    const { creatorId, tier } = body as {
-      creatorId: string;
-      tier: "standard" | "vip";
-    };
-
-    if (!creatorId || !tier) {
-      return NextResponse.json(
-        { error: "Creator ID and tier are required" },
-        { status: 400 }
-      );
+    // ── Check for an existing active subscription (unique constraint) ────────
+    const existing = await db.query.subscriptions.findFirst({
+      where: and(
+        eq(subscriptions.userId,    session.user.id),
+        eq(subscriptions.creatorId, creatorId),
+      ),
+    });
+    if (existing && existing.status === "active") {
+      return NextResponse.json({ error: "You're already subscribed to this creator" }, { status: 409 });
     }
 
-    // ── Fetch creator + linked user info ───────────────────────────────
-    const [creator] = await db
-      .select({
-        creatorId: creators.id,
-        subscriberCount: creators.subscriberCount,
-        standardPrice: creators.standardPrice,
-        vipPrice: creators.vipPrice,
-        userEmail: user.email,
-        userName: user.name,
-      })
-      .from(creators)
-      .innerJoin(user, eq(creators.userId, user.id))
-      .where(eq(creators.id, creatorId))
-      .limit(1);
+    // ── Fetch creator + their user record ─────────────────────────────────────
+    const creatorRow = await db.query.creators.findFirst({
+      where: eq(creators.id, creatorId),
+    });
+    if (!creatorRow) return NextResponse.json({ error: "Creator not found" }, { status: 404 });
 
-    if (!creator) {
-      return NextResponse.json({ error: "Creator not found" }, { status: 404 });
-    }
+    const creatorUser = await db.query.user.findFirst({
+      where: eq(user.id, creatorRow.userId),
+    });
+    if (!creatorUser) return NextResponse.json({ error: "Creator user not found" }, { status: 404 });
 
-    // ── Check if already subscribed ────────────────────────────────────
-    const [existing] = await db
-      .select()
-      .from(subscriptions)
-      .where(
-        and(
-          eq(subscriptions.userId, session.user.id),
-          eq(subscriptions.creatorId, creatorId),
-          eq(subscriptions.status, "active")
-        )
-      )
-      .limit(1);
+    // ── Compute price — applies Fan Pass VIP discount if eligible ────────────
+    const pricing = await getSubscriptionPrice(session.user.id, creatorId, tier);
 
-    if (existing) {
-      return NextResponse.json(
-        { error: "Already subscribed to this creator" },
-        { status: 400 }
-      );
-    }
+    // ── Create the subscription row — matches YOUR actual schema ─────────────
+    const now = new Date();
+    const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
-    // ── Determine price ────────────────────────────────────────────────
-    const price =
-      tier === "vip"
-        ? parseFloat(creator.vipPrice as unknown as string)
-        : creator.standardPrice;
+    const [newSub] = await db.insert(subscriptions).values({
+      userId:              session.user.id,
+      creatorId,
+      tier,
+      status:              "active",
+      priceAtSubscription: pricing.finalPrice.toFixed(2), // decimal column expects a string
+      paymentStatus:       "initiated", // adjust once your payment flow confirms
+      currentPeriodStart:  now,
+      currentPeriodEnd:    periodEnd,
+    }).returning();
 
-    // ── Create subscription ────────────────────────────────────────────
-    const [subscription] = await db
-      .insert(subscriptions)
-      .values({
-        userId: session.user.id,
-        creatorId,
-        tier,
-        status: "active",
-        priceAtSubscription: price.toString(),
-        paymentStatus: "completed",
-        currentPeriodStart: new Date(),
-        currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      })
-      .returning();
+    // ── TODO: send confirmation emails once your email helpers are wired ─────
+    // await Promise.allSettled([
+    //   sendNewSubscriberEmail({ creatorEmail: creatorUser.email, ... }),
+    //   sendSubscriptionConfirmEmail({ subscriberEmail: session.user.email, ... }),
+    // ]);
 
-    // ── Update creator subscriber count ────────────────────────────────
-    await db
-      .update(creators)
-      .set({
-        subscriberCount: creator.subscriberCount + 1,
-        updatedAt: new Date(),
-      })
-      .where(eq(creators.id, creatorId));
-
-    // ── Fire emails concurrently ───────────────────────────────────────
-    await Promise.allSettled([
-      sendNewSubscriberEmail({
-        creatorEmail: creator.userEmail,
-        creatorName: creator.userName,
-        subscriberName: session.user.name,
-        tier,
-        amountCents: Math.round(price * 100),
-      }),
-      sendSubscriptionConfirmEmail({
-        subscriberEmail: session.user.email,
-        subscriberName: session.user.name,
-        creatorName: creator.userName,
-        creatorUsername:
-          creator.userName.toLowerCase().replace(/\s/g, ""),
-        tier,
-        amountCents: Math.round(price * 100),
-      }),
-    ]);
+    console.log(`[subscribe] ${session.user.id} → ${creatorUser.name} (${tier}) @ $${pricing.finalPrice}${pricing.discountApplied ? ` (${pricing.discountPct}% VIP discount applied)` : ""}`);
 
     return NextResponse.json({
       success: true,
-      subscription: {
-        id: subscription.id,
-        tier: subscription.tier,
-        status: subscription.status,
-        expiresAt: subscription.currentPeriodEnd,
-      },
+      subscription: newSub,
+      pricing,
+      message: pricing.discountApplied
+        ? `Subscribed to ${creatorUser.name} for $${pricing.finalPrice.toFixed(2)}/mo (${pricing.discountPct}% Fan Pass VIP discount applied!)`
+        : `Subscribed to ${creatorUser.name} for $${pricing.finalPrice.toFixed(2)}/mo`,
     });
-  } catch (err) {
-    console.error("[Subscribe] Error:", err);
-    return NextResponse.json(
-      { error: "Failed to create subscription" },
-      { status: 500 }
-    );
+
+  } catch (e: any) {
+    console.error("[POST /api/subscriptions/subscribe]", e?.message ?? e);
+    return NextResponse.json({ error: "Server error", detail: e?.message }, { status: 500 });
   }
 }

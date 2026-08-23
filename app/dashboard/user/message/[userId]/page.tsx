@@ -52,7 +52,7 @@ export default async function ChatPage({
       >
         {/* Back */}
         <Link
-          href="/dashboard/user/messages"
+          href="/dashboard/user/message"
           className="size-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-all hover:opacity-80"
           style={{ background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.2)", color: "rgba(240,234,255,0.7)" }}
         >

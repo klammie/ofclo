@@ -22,8 +22,12 @@ import {
   loginStreakMilestone,
   userLoginStreak,
   userPassRewardClaims,
+  creators,
+  user,
+  profiles,
 } from "@/db/schema";
 import { eq, and, asc, desc, sql } from "drizzle-orm";
+import { getUserIsFanPassVip } from "@/lib/fanpass-vip-status.service";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +47,16 @@ export interface LiveSeason {
   daysLeft: number;
   totalDays: number;
   progressPct: number;
+  // Featured creator — for Overview tab spotlight + VIP discount promo
+  featuredCreator: {
+    userId:          string;
+    name:            string;
+    username:        string;
+    avatarUrl:       string | null;
+    coverUrl:        string | null;
+    standardPrice:   number | null; // dollars
+    vipDiscountPct:  number;
+  } | null;
 }
 
 export interface LiveReward {
@@ -112,6 +126,38 @@ export async function getActiveSeason(): Promise<LiveSeason | null> {
   const daysLeft = Math.max(0, Math.round((end - now) / 86_400_000));
   const pct      = Math.min(100, Math.round((elapsed / total) * 100));
 
+  // ── Fetch featured creator profile, if one is set on this season ──────────
+  let featuredCreator: LiveSeason["featuredCreator"] = null;
+  if (row.featuredCreatorId) {
+    const featuredRow = await db
+      .select({
+        userId:        creators.userId,
+        name:          user.name,
+        username:      profiles.username,
+        avatarUrl:     profiles.avatarUrl,
+        coverUrl:      profiles.coverUrl,
+        standardPrice: creators.standardPrice, // assumed cents — adjust if your column is decimal dollars
+      })
+      .from(creators)
+      .innerJoin(user, eq(user.id, creators.userId))
+      .leftJoin(profiles, eq(profiles.id, creators.userId))
+      .where(eq(creators.userId, row.featuredCreatorId))
+      .limit(1)
+      .then((rows) => rows[0]);
+
+    if (featuredRow) {
+      featuredCreator = {
+        userId:         featuredRow.userId,
+        name:           featuredRow.name,
+        username:       featuredRow.username ?? featuredRow.name.toLowerCase().replace(/\s+/g, "_"),
+        avatarUrl:      featuredRow.avatarUrl,
+        coverUrl:       featuredRow.coverUrl,
+        standardPrice:  featuredRow.standardPrice != null ? Number(featuredRow.standardPrice) / 100 : null,
+        vipDiscountPct: 20, // TODO: make this configurable per-season if needed
+      };
+    }
+  }
+
   return {
     id:                row.id,
     name:              row.name,
@@ -127,6 +173,7 @@ export async function getActiveSeason(): Promise<LiveSeason | null> {
     daysLeft,
     totalDays:         total,
     progressPct:       pct,
+    featuredCreator,
   };
 }
 
@@ -271,9 +318,10 @@ export async function getFanPassPageData(userId: string) {
   };
 
   const userLevel = Math.floor(passData.totalXpEarned / season.xpPerLevel) + 1;
+  const isVip = await getUserIsFanPassVip(userId, season.id);
 
   const [rewards, dayConfig, milestones, leaderboard] = await Promise.all([
-    getLiveRewardTrack(season.id, userLevel, userId, false),
+    getLiveRewardTrack(season.id, userLevel, userId, isVip),
     getLiveDayConfig(season.id),
     getLiveMilestones(season.id, passData.currentStreak),
     getLiveLeaderboard(season.id, userId, season.xpPerLevel),
@@ -281,6 +329,7 @@ export async function getFanPassPageData(userId: string) {
 
   return {
     season,
+    isVip,
     passData,
     rewards,
     dayConfig,

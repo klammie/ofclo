@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useAppCounts } from "@/lib/hooks/useAppCounts";
 
 const V      = "#7c3aed";
 const P      = "#ef3976";
@@ -208,16 +209,20 @@ export function MobileBottomNav({ unreadMessages = 0, userRole = "user" }: Mobil
   const router   = useRouter();
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const tabs    = PRIMARY_TABS_BY_ROLE[userRole] ?? PRIMARY_TABS_BY_ROLE.user;
-  const isMore  = !pathname.startsWith(tabs.feed) &&
-                  !pathname.startsWith(tabs.messages) &&
-                  !pathname.startsWith(tabs.fanpass);
+  // Use live counts from useAppCounts — falls back to prop if hook returns 0
+  const { messages: liveMessages } = useAppCounts();
+  const msgCount = liveMessages > 0 ? liveMessages : unreadMessages;
+
+  const tabs   = PRIMARY_TABS_BY_ROLE[userRole] ?? PRIMARY_TABS_BY_ROLE.user;
+  const isMore = !pathname.startsWith(tabs.feed) &&
+                 !pathname.startsWith(tabs.messages) &&
+                 !pathname.startsWith(tabs.fanpass);
 
   const PRIMARY = [
-    { id: "feed",     label: "Feed",     href: tabs.feed,     icon: (a: boolean) => <FeedIcon active={a} />, match: (p: string) => p.startsWith(tabs.feed) },
-    { id: "messages", label: "Messages", href: tabs.messages, icon: (a: boolean) => <MsgIcon  active={a} />, match: (p: string) => p.startsWith(tabs.messages), badge: unreadMessages },
-    { id: "fanpass",  label: "Fan Pass", href: tabs.fanpass,  icon: (a: boolean) => <PassIcon active={a} />, match: (p: string) => p.startsWith(tabs.fanpass) },
-    { id: "more",     label: "More",     href: "#",           icon: (a: boolean) => <GridIcon active={a} />, match: () => false },
+    { id: "feed",     label: "Feed",     href: tabs.feed,     icon: (a: boolean) => <FeedIcon active={a} />, match: (p: string) => p.startsWith(tabs.feed),     badge: false },
+    { id: "messages", label: "Messages", href: tabs.messages, icon: (a: boolean) => <MsgIcon  active={a} />, match: (p: string) => p.startsWith(tabs.messages),  badge: msgCount > 0 },
+    { id: "fanpass",  label: "Fan Pass", href: tabs.fanpass,  icon: (a: boolean) => <PassIcon active={a} />, match: (p: string) => p.startsWith(tabs.fanpass),   badge: false },
+    { id: "more",     label: "More",     href: "#",           icon: (a: boolean) => <GridIcon active={a} />, match: () => false,                                  badge: false },
   ];
 
   return (
@@ -246,14 +251,14 @@ export function MobileBottomNav({ unreadMessages = 0, userRole = "user" }: Mobil
                     style={{ background: GRAD }} />
                 )}
 
-                {/* Icon + unread badge */}
+                {/* Icon + small dot badge — dot instead of pill keeps icon spacing consistent */}
                 <div className="relative">
                   {tab.icon(active)}
-                  {tab.badge && tab.badge > 0 && (
-                    <div className="absolute -top-1 -right-2 min-w-[16px] h-4 rounded-full flex items-center justify-center text-[9px] font-black text-white px-1"
-                      style={{ background: P, boxShadow: "0 0 6px rgba(239,57,118,0.5)" }}>
-                      {tab.badge > 99 ? "99+" : tab.badge}
-                    </div>
+                  {tab.badge && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 size-2 rounded-full border"
+                      style={{ background: P, borderColor: "#0d0d1a", boxShadow: `0 0 5px ${P}` }}
+                    />
                   )}
                 </div>
 

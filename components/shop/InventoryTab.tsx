@@ -196,7 +196,13 @@ function InventoryCard({
 
       {/* Action button */}
       <div className="p-3 pt-1.5 mt-auto">
-        {isEquippable && (
+        {item.type === "gift" ? (
+          // Gifts: no Use button — send from feed
+          <div className="w-full py-2 rounded-xl text-[11px] font-black text-center border"
+            style={{ background: "rgba(255,255,255,0.02)", borderColor: BORDER, color: MUTED }}>
+            🎁 Send from feed
+          </div>
+        ) : isEquippable ? (
           <button
             onClick={() => onEquip(item.inventoryId, !equipped)}
             disabled={isActing}
@@ -210,28 +216,12 @@ function InventoryCard({
             }}>
             {isActing ? "…" : equipped ? "Unequip" : "Equip"}
           </button>
-        )}
-        {isConsumable && !active && (
-          <button
-            onClick={() => onUse(item)}
-            disabled={isActing || item.quantity < 1}
-            className="w-full py-2 rounded-xl text-[11px] font-black text-white transition-all"
-            style={{
-              background: item.quantity > 0 ? GRAD : "rgba(124,58,237,0.1)",
-              cursor:     isActing || item.quantity < 1 ? "not-allowed" : "pointer",
-              opacity:    isActing || item.quantity < 1 ? 0.6 : 1,
-              boxShadow:  item.quantity > 0 ? "0 4px 12px rgba(124,58,237,0.25)" : "none",
-            }}>
-            {isActing ? "…" : item.quantity < 1 ? "Used up" : "Use"}
-          </button>
-        )}
-        {isConsumable && active && (
+        ) : isConsumable && active ? (
           <div className="w-full py-2 rounded-xl text-[11px] font-black text-center border"
             style={{ background: "rgba(34,197,94,0.07)", borderColor: "rgba(34,197,94,0.2)", color: "#4ade80" }}>
             Active
           </div>
-        )}
-        {!isEquippable && !isConsumable && (
+        ) : (
           <div className="w-full py-2 rounded-xl text-[11px] font-black text-center border"
             style={{ background: "rgba(255,255,255,0.02)", borderColor: BORDER, color: MUTED }}>
             Owned
@@ -304,20 +294,21 @@ export default function InventoryTab() {
   const [useTarget,      setUseTarget]     = useState<InventoryItem | null>(null);
   const [toast,          setToast]         = useState<string | null>(null);
 
-  const fetch_ = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res  = await fetch("/api/shop/inventory");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed");
-      setItems(data.items ?? []);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+ 
+const fetch_ = useCallback(async () => {
+  setLoading(true);
+  setError(null);
+  try {
+    const res  = await fetch(`/api/shop/inventory?t=${Date.now()}`); // bust cache
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Failed");
+    setItems(data.items ?? []);
+  } catch (e: any) {
+    setError(e.message);
+  } finally {
+    setLoading(false);
+  }
+}, []);
 
   useEffect(() => { fetch_(); }, [fetch_]);
 
@@ -374,14 +365,8 @@ export default function InventoryTab() {
     }
   }, [useTarget]);
 
-  // Filter
-  const sources  = ["all", ...Array.from(new Set(items.map((i) => i.source ?? "purchased")))];
-  const filtered = items.filter((i) => {
-    const catMatch = activeCategory === "all" || i.type === activeCategory;
-    const srcMatch = activeSource   === "all" || (i.source ?? "purchased") === activeSource;
-    return catMatch && srcMatch;
-  });
-
+  // Show all items — no category or source filtering
+  const filtered = items;
   const equipped = filtered.filter((i) => i.isEquipped);
   const active   = filtered.filter((i) => !i.isEquipped && isBoosterActive(i));
   const rest     = filtered.filter((i) => !i.isEquipped && !isBoosterActive(i));
@@ -397,44 +382,6 @@ export default function InventoryTab() {
             {items.length} item{items.length !== 1 ? "s" : ""} collected
           </p>
         </div>
-        {/* Source filter */}
-        <div className="flex gap-2 flex-wrap">
-          {sources.map((src) => {
-            const cfg = src === "all" ? { label: "All Sources", icon: "🎒", color: V } : SOURCE_CONFIG[src] ?? { label: src, icon: "📦", color: MUTED };
-            return (
-              <button key={src} onClick={() => setSource(src)}
-                className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[10px] font-black transition-all"
-                style={activeSource === src
-                  ? { background: "rgba(124,58,237,0.15)", borderColor: V, color: TEXT }
-                  : { background: "transparent", borderColor: BORDER, color: MUTED }}>
-                <span>{cfg.icon}</span> {cfg.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Category tabs ── */}
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-        {TYPE_CATEGORIES.map((cat) => {
-          const count  = cat.id === "all" ? items.length : items.filter((i) => i.type === cat.id).length;
-          if (count === 0 && cat.id !== "all") return null;
-          return (
-            <button key={cat.id} onClick={() => setCategory(cat.id)}
-              className="flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[11px] font-black whitespace-nowrap flex-shrink-0 transition-all"
-              style={activeCategory === cat.id
-                ? { background: "rgba(124,58,237,0.15)", borderColor: V, color: TEXT, boxShadow: "0 0 10px rgba(124,58,237,0.2)" }
-                : { background: "transparent", borderColor: BORDER, color: MUTED }}>
-              <span>{cat.icon}</span> {cat.label}
-              {count > 0 && (
-                <span className="rounded-full px-1.5 text-[8px] font-black"
-                  style={{ background: activeCategory === cat.id ? "rgba(124,58,237,0.3)" : "rgba(124,58,237,0.1)", color: activeCategory === cat.id ? TEXT : MUTED }}>
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
       </div>
 
       {error && (

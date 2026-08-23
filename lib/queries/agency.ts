@@ -4,7 +4,7 @@
 
 import { db } from "@/db";
 import {
-  user, creators, agencies, messages,  subscriptions, agencyCreators,  posts, tips,
+  user, creators, agencies, messages,  subscriptions, agencyCreators, notifications,  posts, tips,
   transactions, profiles,
 } from "@/db/schema";
 import { eq, desc, count, sum, and, gte, sql } from "drizzle-orm";
@@ -414,43 +414,51 @@ export async function getAgencyDashboardData(userId: string) {
   }
 
   // Get all creators managed by agency with stats
-  const agencyCreatorsData = await db.execute<{
-    creator_id: string;
-    creator_user_id: string;
-    creator_name: string;
-    username: string;
-    avatar_url: string | null;
-    is_verified: boolean;
-    subscriber_count: number;
-    post_count: number;
-    standard_price: string;
-    vip_price: string;
-    total_revenue: string;
-    active_subscribers: number;
-  }>(sql`
-    SELECT 
-      c.id as creator_id,
-      c.user_id as creator_user_id,
-      u.name as creator_name,
-      COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
-      p.avatar_url,
-      c.is_verified,
-      c.subscriber_count,
-      c.post_count,
-      c.standard_price,
-      c.vip_price,
-      COALESCE(SUM(s.price_at_subscription::decimal), 0)::text as total_revenue,
-      COUNT(DISTINCT CASE WHEN s.status = 'active' THEN s.id END)::int as active_subscribers
-    FROM ${agencyCreators} ac
-    JOIN ${creators} c ON ac.creator_id = c.id
-    JOIN ${user} u ON c.user_id = u.id
-    LEFT JOIN ${profiles} p ON u.id = p.id
-    LEFT JOIN ${subscriptions} s ON c.id = s.creator_id
-    WHERE ac.agency_id = ${agency.id}
-    GROUP BY c.id, c.user_id, u.name, p.username, u.email, p.avatar_url, c.is_verified, 
-             c.subscriber_count, c.post_count, c.standard_price, c.vip_price
-    ORDER BY c.subscriber_count DESC
-  `);
+const agencyCreatorsData = await db.execute<{
+  creator_id: string;
+  creator_user_id: string;
+  creator_name: string;
+  username: string;
+  avatar_url: string | null;
+  is_verified: boolean;
+  subscriber_count: number;
+  post_count: number;
+  standard_price: string;
+  vip_price: string;
+  total_revenue: string;
+  active_subscribers: number;
+  unread_messages: number;   // ← add this
+}>(sql`
+  SELECT 
+    c.id as creator_id,
+    c.user_id as creator_user_id,
+    u.name as creator_name,
+    COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
+    p.avatar_url,
+    c.is_verified,
+    c.subscriber_count,
+    c.post_count,
+    c.standard_price,
+    c.vip_price,
+    COALESCE(SUM(s.price_at_subscription::decimal), 0)::text as total_revenue,
+    COUNT(DISTINCT CASE WHEN s.status = 'active' THEN s.id END)::int as active_subscribers,
+    -- Unread messages sent TO this creator's userId
+    (
+      SELECT COUNT(*)::int
+      FROM messages m
+      WHERE m.to_user_id = c.user_id
+        AND m.is_read = false
+    ) as unread_messages
+  FROM ${agencyCreators} ac
+  JOIN ${creators} c ON ac.creator_id = c.id
+  JOIN ${user} u ON c.user_id = u.id
+  LEFT JOIN ${profiles} p ON u.id = p.id
+  LEFT JOIN ${subscriptions} s ON c.id = s.creator_id
+  WHERE ac.agency_id = ${agency.id}
+  GROUP BY c.id, c.user_id, u.name, p.username, u.email, p.avatar_url, c.is_verified, 
+           c.subscriber_count, c.post_count, c.standard_price, c.vip_price
+  ORDER BY c.subscriber_count DESC
+`);
 
   // Get agency-wide stats - ✅ FIXED: Access .rows[0] instead of destructuring
   const statsResult = await db.execute<{
@@ -562,5 +570,107 @@ export async function getCreatorFullStats(creatorId: string) {
     subscribers: subscriberStats.rows[0],
     posts: postStats.rows[0],
     messages: messageStats.rows[0],
+  };
+}
+
+// Add this to lib/queries/agency.ts
+
+
+
+/**
+ * Returns notifications from all creators managed by this agency.
+ * Types included: new_like, new_comment, new_message, new_subscriber,
+ *                 new_tip, gift_received — anything that happened to
+ *                 a creator the agency manages.
+ */
+export async function getAgencyNotifications(
+  agencyId: string,
+  limit = 50,
+  cursor?: string
+): Promise<{
+  notifications: Array<{
+    id: string;
+    creatorName: string;
+    creatorAvatar: string | null;
+    creatorUsername: string;
+    type: string;
+    title: string;
+    body: string;
+    icon: string;
+    isRead: boolean;
+    actionUrl: string | null;
+    createdAt: string;
+  }>;
+  unreadCount: number;
+}> {
+  // Get all creator userIds managed by this agency
+  const managedCreators = await db
+    .select({
+      creatorUserId: creators.userId,
+      creatorName:   user.name,
+      creatorAvatar: profiles.avatarUrl,
+      username:      profiles.username,
+    })
+    .from(agencyCreators)
+    .innerJoin(creators, eq(creators.id,    agencyCreators.creatorId))
+    .innerJoin(user,     eq(user.id,         creators.userId))
+    .leftJoin(profiles,  eq(profiles.id,     creators.userId))
+    .where(eq(agencyCreators.agencyId, agencyId));
+
+  if (managedCreators.length === 0) {
+    return { notifications: [], unreadCount: 0 };
+  }
+
+  const creatorUserIds = managedCreators.map((c) => c.creatorUserId);
+
+  // Build a lookup map creatorUserId → display info
+  const creatorMap = Object.fromEntries(
+    managedCreators.map((c) => [c.creatorUserId, c])
+  );
+
+  // Fetch notifications belonging to any of the managed creator userIds
+  const rows = await db.query.notifications.findMany({
+    where: (t, { and, inArray, lt }) =>
+      cursor
+        ? and(
+            inArray(t.userId, creatorUserIds),
+            lt(t.createdAt, new Date(cursor))
+          )
+        : inArray(t.userId, creatorUserIds),
+    orderBy: [desc(notifications.createdAt)],
+    limit,
+  });
+
+  // Unread count across all managed creators
+  const [unreadResult] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(notifications)
+    .where(
+      and(
+        sql`${notifications.userId} = ANY(${sql.raw(
+          `ARRAY[${creatorUserIds.map((id) => `'${id}'`).join(",")}]::text[]`
+        )})`,
+        eq(notifications.isRead, false)
+      )
+    );
+
+  return {
+    unreadCount: unreadResult?.count ?? 0,
+    notifications: rows.map((n) => {
+      const creator = creatorMap[n.userId];
+      return {
+        id:              n.id,
+        creatorName:     creator?.creatorName  ?? "Unknown Creator",
+        creatorAvatar:   creator?.creatorAvatar ?? null,
+        creatorUsername: creator?.username      ?? "",
+        type:            n.type,
+        title:           n.title,
+        body:            n.body,
+        icon:            n.icon,
+        isRead:          n.isRead,
+        actionUrl:       n.actionUrl ?? null,
+        createdAt:       n.createdAt.toISOString(),
+      };
+    }),
   };
 }

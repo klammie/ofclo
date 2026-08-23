@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { toast } from "react-hot-toast";
+import { PostGiftOverlay } from "./GiftComponents";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const V      = "#7c3aed";
@@ -60,23 +61,15 @@ interface GiftItem {
   inventoryId?: number;
 }
 
-const FALLBACK_GIFTS: GiftItem[] = [
-  { id: "g1", name: "Rose",    icon: "🌹", quantity: 3, rarity: "common"    },
-  { id: "g2", name: "Star",    icon: "⭐", quantity: 1, rarity: "rare"      },
-  { id: "g3", name: "Diamond", icon: "💎", quantity: 0, rarity: "epic"      },
-  { id: "g4", name: "Crown",   icon: "👑", quantity: 1, rarity: "legendary" },
-  { id: "g5", name: "Heart",   icon: "💖", quantity: 5, rarity: "common"    },
-  { id: "g6", name: "Fire",    icon: "🔥", quantity: 2, rarity: "rare"      },
-];
-
 function GiftModal({ post, onClose, onGiftSent }: {
   post: any; onClose: () => void; onGiftSent?: (emoji: string) => void;
 }) {
   const router = useRouter();
-  const [tab,     setTab]     = useState<"inventory" | "shop">("inventory");
-  const [gifts,   setGifts]   = useState<GiftItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState<string | null>(null);
+  const [tab,      setTab]      = useState<"inventory" | "shop">("inventory");
+  const [gifts,    setGifts]    = useState<GiftItem[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(false);
+  const [sending,  setSending]  = useState<string | null>(null);
   const [justSent, setJustSent] = useState<string | null>(null);
 
   // Close on Escape + lock body scroll
@@ -87,50 +80,65 @@ function GiftModal({ post, onClose, onGiftSent }: {
     return () => { document.removeEventListener("keydown", handler); document.body.style.overflow = ""; };
   }, [onClose]);
 
-  // Fetch inventory
   useEffect(() => {
     fetch("/api/shop/inventory")
       .then((r) => r.json())
       .then((data) => {
         const items = (data.items ?? []).filter((i: any) => i.type === "gift");
-        setGifts(items.length > 0
-          ? items.map((i: any) => ({
-              id:          String(i.itemId),
-              name:        i.name,
-              icon:        i.icon,
-              quantity:    i.quantity,
-              rarity:      i.rarity as Rarity,
-              inventoryId: i.inventoryId,
-            }))
-          : FALLBACK_GIFTS
-        );
+        setGifts(items.map((i: any) => ({
+          id:          String(i.itemId),      // string — for display only
+          inventoryId: Number(i.inventoryId), // integer PK — sent to API
+          name:        i.name,
+          icon:        i.icon,
+          quantity:    i.quantity,
+          rarity:      i.rarity as Rarity,
+        })));
       })
-      .catch(() => setGifts(FALLBACK_GIFTS))
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, []);
 
   const handleSend = async (gift: GiftItem) => {
-    if (gift.quantity < 1 || sending) return;
-    setSending(gift.id);
-    try {
-      await fetch("/api/gifts/send", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          inventoryId: gift.inventoryId ?? gift.id,
-          recipientId: post.creator?.userId ?? post.creatorUserId,
-          postId:      post.id,
-        }),
-      });
-      setJustSent(gift.id);
+  if (gift.quantity < 1 || sending) return;
+  setSending(gift.inventoryId);
+  try {
+    const res = await fetch("/api/gift/send", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        inventoryId: gift.inventoryId,
+        recipientId: post.creator?.id ?? post.creatorUserId ?? post.creator?.userId,
+        postId:      post.id,
+      }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error("[GiftModal] send failed:", data.error);
+      return;
+    }
+
+    const data = await res.json();
+    const remaining = data.remainingQuantity ?? 0;
+
+    setJustSent(gift.id);
+    onGiftSent?.(gift.icon);
+
+    if (remaining <= 0) {
+      setGifts((prev) => prev.filter((g) => g.inventoryId !== gift.inventoryId));
+    } else {
       setGifts((prev) => prev.map((g) =>
-        g.id === gift.id ? { ...g, quantity: g.quantity - 1 } : g
+        g.inventoryId === gift.inventoryId ? { ...g, quantity: remaining } : g
       ));
-      onGiftSent?.(gift.icon);   // trigger float animation on the post
-      setTimeout(() => setJustSent(null), 2000);
-    } catch {}
-    finally { setSending(null); }
-  };
+    }
+
+    setTimeout(() => setJustSent(null), 2000);
+  } catch (e) {
+    console.error("[GiftModal] network error:", e);
+  } finally {
+    setSending(null);
+  }
+};
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
@@ -189,6 +197,12 @@ function GiftModal({ post, onClose, onGiftSent }: {
                     style={{ background: "rgba(124,58,237,0.08)" }} />
                 ))}
               </div>
+            ) : error ? (
+              <div className="flex flex-col items-center gap-3 py-10 text-center">
+                <span className="text-4xl">⚠️</span>
+                <p className="text-[14px] font-black" style={{ color: TEXT }}>Couldn't load your inventory</p>
+                <p className="text-[12px]" style={{ color: MUTED }}>Please try again in a moment</p>
+              </div>
             ) : gifts.filter((g) => g.quantity > 0).length === 0 ? (
               <div className="flex flex-col items-center gap-3 py-10 text-center">
                 <span className="text-4xl">🎁</span>
@@ -200,7 +214,7 @@ function GiftModal({ post, onClose, onGiftSent }: {
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-3">
-                {gifts.map((g) => {
+                {gifts.filter((g) => g.quantity > 0).map((g) => {
                   const rc       = RARITY_CONFIG[g.rarity];
                   const isSent   = justSent === g.id;
                   const isBusy   = sending  === g.id;
@@ -328,25 +342,37 @@ function CommentModal({ post, currentUserId, onClose, onCommentAdded }: {
   }, [input, posting, post.id, onCommentAdded]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center"
+    <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center"
       style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
 
-      <div className="w-full sm:max-w-lg flex flex-col overflow-hidden"
-        style={{
-          background:   "#1a1635",
-          borderRadius: "24px 24px 0 0",
-          border:       "1px solid rgba(124,58,237,0.18)",
-          borderBottom: "none",
-          boxShadow:    "0 -8px 40px rgba(0,0,0,0.5)",
-          maxHeight:    "90vh",
-          animation:    "cmSlideUp .32s cubic-bezier(.32,.72,0,1)",
-        }}>
+      <div
+  className="w-full sm:max-w-lg flex flex-col overflow-hidden"
+  style={{
+    background: "#1a1635",
+    borderRadius: "24px 24px 0 0",
+    border: "1px solid rgba(124,58,237,0.18)",
+    borderBottom: "none",
+    boxShadow: "0 -8px 40px rgba(0,0,0,0.5)",
+    maxHeight: "90vh",
+    animation: "cmSlideUp .32s cubic-bezier(.32,.72,0,1)",
+  }}
+  // Fully rounded on large screens
+  ref={(el) => {
+    if (el && window.innerWidth >= 1024) {
+      el.style.borderRadius = "24px";
+      el.style.borderBottom = "1px solid rgba(124,58,237,0.18)";
+    }
+  }}
+>
+  {/* Drag handle */}
+  <div className="flex justify-center pt-3 pb-2 flex-shrink-0">
+    <div
+      className="w-10 h-1 rounded-full"
+      style={{ background: "rgba(255,255,255,0.15)" }}
+    />
+  </div>
 
-        {/* Drag handle */}
-        <div className="flex justify-center pt-3 pb-2 flex-shrink-0">
-          <div className="w-10 h-1 rounded-full" style={{ background: "rgba(255,255,255,0.15)" }} />
-        </div>
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 pb-3 border-b flex-shrink-0"
@@ -472,6 +498,132 @@ function CommentModal({ post, currentUserId, onClose, onCommentAdded }: {
   );
 }
 
+// ─── Fullscreen media viewer ──────────────────────────────────────────────────
+function FullscreenMediaViewer({ post, onClose, onLike }: {
+  post: any; onClose: () => void; onLike: (x: number, y: number) => void;
+}) {
+  const lastTap   = useRef(0);
+  const [likeAnim, setLikeAnim] = useState(false);
+  const [likePos,  setLikePos]  = useState({ x: 50, y: 50 });
+  // scroll-guard: ignore taps where finger moved > 8px
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const didMove    = useRef(false);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+
+  function handleTouchStart(e: React.TouchEvent) {
+    touchStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    didMove.current = false;
+  }
+  function handleTouchMove(e: React.TouchEvent) {
+    if (!touchStart.current) return;
+    const dx = Math.abs(e.touches[0].clientX - touchStart.current.x);
+    const dy = Math.abs(e.touches[0].clientY - touchStart.current.y);
+    if (dx > 8 || dy > 8) didMove.current = true;
+  }
+
+  function handleTap(e: React.MouseEvent | React.TouchEvent) {
+    if ("changedTouches" in e && didMove.current) { didMove.current = false; return; }
+    const now  = Date.now();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    let cx: number, cy: number;
+    if ("changedTouches" in e && e.changedTouches.length > 0) {
+      cx = e.changedTouches[0].clientX; cy = e.changedTouches[0].clientY;
+    } else if ("clientX" in e) {
+      cx = e.clientX; cy = e.clientY;
+    } else { return; }
+    const x = ((cx - rect.left) / rect.width)  * 100;
+    const y = ((cy - rect.top)  / rect.height) * 100;
+
+    if (now - lastTap.current < 300) {
+      lastTap.current = 0;
+      setLikePos({ x, y });
+      setLikeAnim(true);
+      setTimeout(() => setLikeAnim(false), 900);
+      onLike(x, y);
+    } else {
+      lastTap.current = now;
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.96)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+
+      <button onClick={onClose}
+        className="absolute top-4 right-4 z-20 size-9 rounded-full flex items-center justify-center transition-all hover:scale-105"
+        style={{ background: "rgba(255,255,255,0.1)", color: "#fff", backdropFilter: "blur(4px)" }}>
+        ✕
+      </button>
+
+      {/* Media — double-tap-to-like zone */}
+      <div className="relative w-full h-full flex items-center justify-center p-4 sm:p-10"
+        onClick={handleTap}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTap}>
+
+        {post.mediaType === "video" ? (
+          <video src={post.mediaUrl} poster={post.thumbnailUrl ?? undefined} controls autoPlay
+            className="max-w-full max-h-full" style={{ objectFit: "contain" }}
+            controlsList="nodownload" onContextMenu={(e) => e.preventDefault()}
+            onClick={(e) => e.stopPropagation()} />
+        ) : (
+          <img src={post.mediaUrl} alt={post.title ?? "Post"}
+            className="max-w-full max-h-full select-none" style={{ objectFit: "contain" }}
+            onContextMenu={(e) => e.preventDefault()} />
+        )}
+
+        {/* Double-tap heart burst */}
+        {likeAnim && (
+          <div className="absolute inset-0 pointer-events-none">
+            <div style={{
+              position: "absolute", left: `${likePos.x}%`, top: `${likePos.y}%`,
+              transform: "translate(-50%,-50%)", fontSize: 80, userSelect: "none",
+              animation: "fsHeartBurst 0.9s cubic-bezier(0.17,0.89,0.32,1.28) forwards",
+              filter: "drop-shadow(0 0 20px rgba(239,57,118,0.8))",
+            }}>❤️</div>
+          </div>
+        )}
+
+        {/* "Double tap to like" hint — fades after 2s */}
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-none"
+          style={{ animation: "fadeHint 2s ease-out 0.5s forwards", opacity: 0 }}>
+          <p className="text-[12px] font-bold text-white/60 bg-black/30 rounded-full px-3 py-1.5 backdrop-blur-sm">
+            Double tap to like
+          </p>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes fsHeartBurst {
+          0%   { transform: translate(-50%,-50%) scale(0);   opacity: 0; }
+          15%  { transform: translate(-50%,-50%) scale(1.4); opacity: 1; }
+          30%  { transform: translate(-50%,-50%) scale(1.0); opacity: 1; }
+          50%  { transform: translate(-50%,-50%) scale(1.2); opacity: 1; }
+          80%  { transform: translate(-50%,-50%) scale(1.0); opacity: 0.8; }
+          100% { transform: translate(-50%,-50%) scale(1.1); opacity: 0; }
+        }
+        @keyframes fadeHint {
+          0%   { opacity: 0; }
+          20%  { opacity: 1; }
+          80%  { opacity: 1; }
+          100% { opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ─── POST CARD — Instagram style ──────────────────────────────────────────────
 export function PostCard({ post, currentUserId, onLikeUpdate }) {
   const [isLiking,          setIsLiking]         = useState(false);
@@ -480,6 +632,7 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
   const [isBookmarking,     setIsBookmarking]     = useState(false);
   const [bookmarked,        setBookmarked]        = useState<boolean>(Boolean(post.isBookmarked));
   const [showGiftModal,     setShowGiftModal]     = useState(false);
+  const [showFullscreen,    setShowFullscreen]    = useState(false);
   const [captionExpanded,   setCaptionExpanded]   = useState(false);
 
   // ── Double-tap to like ───────────────────────────────────────────────────────
@@ -488,6 +641,8 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
   const [heartBounce, setHeartBounce] = useState(false);   // action bar heart bounce
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTap  = useRef<number>(0);
+  const touchStartPos = useRef<{ x: number; y: number } | null>(null);
+  const didScroll      = useRef(false);
 
   // ── Gift sent animation ───────────────────────────────────────────────────────
   const [giftAnim,     setGiftAnim]     = useState<string | null>(null); // emoji
@@ -525,8 +680,32 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
   }
 
   // Double-tap detection on the media area
+  // Track touch start position to detect scrolling vs tapping
+  function handleTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    const t = e.touches[0];
+    touchStartPos.current = { x: t.clientX, y: t.clientY };
+    didScroll.current = false;
+  }
+
+  function handleTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (!touchStartPos.current) return;
+    const t = e.touches[0];
+    const dx = Math.abs(t.clientX - touchStartPos.current.x);
+    const dy = Math.abs(t.clientY - touchStartPos.current.y);
+    // If the finger moved more than ~8px in any direction, treat as a scroll/swipe, not a tap
+    if (dx > 8 || dy > 8) didScroll.current = true;
+  }
+
   function handleMediaTap(e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) {
+    // Ignore taps that were actually scrolls
+    if ("changedTouches" in e && didScroll.current) {
+      didScroll.current = false;
+      touchStartPos.current = null;
+      return;
+    }
+    touchStartPos.current = null;
     if (post.isLocked) return;
+
     const now = Date.now();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
 
@@ -545,24 +724,9 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
     const x = ((clientX - rect.left) / rect.width)  * 100;
     const y = ((clientY - rect.top)  / rect.height) * 100;
 
-    if (now - lastTap.current < 300) {
-      // Double tap!
-      if (tapTimer.current) clearTimeout(tapTimer.current);
-      lastTap.current = 0;
-      // Only like if not already liked
-      if (!post.isLiked) {
-        handleLike(true, x, y);
-      } else {
-        // Still show animation even if already liked
-        setLikePos({ x, y });
-        setLikeAnim(true);
-        setHeartBounce(true);
-        setTimeout(() => setLikeAnim(false),    900);
-        setTimeout(() => setHeartBounce(false), 400);
-      }
-    } else {
-      lastTap.current = now;
-    }
+    // Single tap → open fullscreen immediately (no delay)
+    // Double-tap-to-like now lives INSIDE the fullscreen viewer
+    if (!post.isLocked) setShowFullscreen(true);
   }
 
   // Gift sent animation trigger (called from GiftModal)
@@ -608,10 +772,11 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
         {/* ── Creator header ── */}
         <div className="flex items-center gap-3 px-1 py-3">
           <a href={`/dashboard/user/feed/${creatorUsername}`} className="flex-shrink-0">
-            <div className="size-9 rounded-full overflow-hidden flex items-center justify-center font-black text-white text-[13px]"
+            <div className="size-9 rounded-full overflow-hidden flex items-center justify-center font-black text-white text-[13px] transition-opacity hover:opacity-80"
               style={{
                 background: avatarUrl ? "transparent" : placeholderGrad(post.id),
-                border:     `2px solid rgba(124,58,237,0.5)`,
+                border:     `2px solid rgba(124,58,237,0.45)`,
+                boxShadow:  "0 0 0 1.5px #0d0d1a",
               }}>
               {avatarUrl
                 ? <Image src={avatarUrl} alt={creatorName} width={36} height={36} className="size-full object-cover" />
@@ -621,18 +786,24 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
           </a>
 
           <div className="flex-1 min-w-0">
-            <a href={`/dashboard/user/feed/${creatorUsername}`}
-              className="text-[13px] font-black hover:underline block truncate"
-              style={{ color: TEXT }}>
-              {creatorName}
-            </a>
-            <p className="text-[10px]" style={{ color: MUTED }}>
-              {creatorUsername && `@${creatorUsername} · `}{timeAgo}
-            </p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <a href={`/dashboard/user/feed/${creatorUsername}`}
+                className="text-[13px] font-black hover:underline"
+                style={{ color: TEXT }}>
+                {creatorName}
+              </a>
+              <span className="text-[11px]" style={{ color: "rgba(240,234,255,0.2)" }}>·</span>
+              <span className="text-[11px]" style={{ color: MUTED }}>{timeAgo}</span>
+            </div>
+            {creatorUsername && (
+              <p className="text-[10px] mt-0.5" style={{ color: "rgba(240,234,255,0.28)" }}>
+                @{creatorUsername}
+              </p>
+            )}
           </div>
 
           {/* Three-dot */}
-          <button className="size-7 flex items-center justify-center rounded-full"
+          <button className="size-8 flex items-center justify-center rounded-full transition-colors hover:bg-white/5 flex-shrink-0"
             style={{ color: MUTED }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="5" cy="12" r="1.5"/>
@@ -646,6 +817,8 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
         <div className="relative w-full overflow-hidden"
           style={{ aspectRatio: post.mediaType === "video" ? "4/5" : "1/1", borderRadius: 12, background: "#0d0d1a" }}
           onClick={handleMediaTap}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
           onTouchEnd={handleMediaTap}
         >
 
@@ -714,7 +887,7 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
         </div>
 
         {/* ── Actions row — Instagram style ── */}
-        <div className="flex items-center gap-1 px-1 pt-3 pb-1">
+        <div className="flex items-center px-1 pt-2.5 pb-1" style={{ gap: 2 }}>
 
           {/* Like */}
           <button onClick={() => handleLike(false)} disabled={isLiking}
@@ -743,6 +916,8 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
 
           {/* Gift — only shown to non-owners */}
           {currentUserId !== (post.creator?.userId ?? post.creatorUserId) && (
+            <>
+            <PostGiftOverlay postId={post.id} initialTotal={post.giftCount ?? 0} />
             <button onClick={() => setShowGiftModal(true)}
               className="p-1.5 rounded-xl transition-all hover:scale-110 active:scale-95">
               <svg width="25" height="25" viewBox="0 0 24 24" fill="none"
@@ -754,6 +929,7 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
                 <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
               </svg>
             </button>
+            </>
           )}
 
           {/* Bookmark — pushed to right */}
@@ -814,7 +990,7 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
         )}
 
         {/* ── Divider ── */}
-        <div className="mt-4 h-px" style={{ background: BORDER }} />
+        <div className="mt-3 h-px" style={{ background: "rgba(255,255,255,0.05)" }} />
       </article>
 
       {/* Comment modal */}
@@ -834,6 +1010,12 @@ export function PostCard({ post, currentUserId, onLikeUpdate }) {
           onClose={() => setShowGiftModal(false)}
           onGiftSent={(emoji) => { setShowGiftModal(false); handleGiftSent(emoji); }}
         />
+      )}
+
+      {/* Fullscreen media viewer */}
+      {showFullscreen && post.mediaUrl && !post.isLocked && (
+        <FullscreenMediaViewer post={post} onClose={() => setShowFullscreen(false)}
+          onLike={(x, y) => { if (!post.isLiked) handleLike(true, x, y); else { setLikePos({ x, y }); setLikeAnim(true); setHeartBounce(true); setTimeout(() => setLikeAnim(false), 900); setTimeout(() => setHeartBounce(false), 400); } }} />
       )}
 
       {/* ── Global animation keyframes ── */}

@@ -128,19 +128,153 @@ function PostModal({ post, onClose, onLike, onBookmark, onSubscribe }: {
   const router = useRouter();
   const r = RARITY[post.creatorRarity];
   const [comment, setComment] = useState("");
+  const [isMobile, setIsMobile] = useState(false);
+  const [showMobileComments, setShowMobileComments] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Detect mobile viewport
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 1024);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   // Close on Escape
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showMobileComments) setShowMobileComments(false);
+        else onClose();
+      }
+    };
     document.addEventListener("keydown", handler);
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", handler);
       document.body.style.overflow = "";
     };
-  }, [onClose]);
+  }, [onClose, showMobileComments]);
 
+  // ── Mobile: full-screen media-only view ──────────────────────────────────────
+  if (isMobile) {
+    return (
+      <>
+        <div className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "#0d0d1a" }}>
+
+          {/* Close */}
+          <button onClick={onClose}
+            className="absolute top-4 left-4 z-20 size-9 rounded-full flex items-center justify-center"
+            style={{ background: "rgba(0,0,0,0.55)", color: "rgba(240,234,255,0.85)", backdropFilter: "blur(4px)" }}>
+            ✕
+          </button>
+
+          {/* Media — fills the screen */}
+          <div className="relative w-full h-full flex items-center justify-center">
+            {post.mediaUrl ? (
+              post.mediaType === "video" ? (
+                <video
+                  src={post.mediaUrl}
+                  poster={post.thumbnailUrl ?? undefined}
+                  controls
+                  className="w-full h-full object-contain"
+                  controlsList="nodownload"
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+              ) : (
+                <img src={post.mediaUrl} alt={post.caption ?? "Post"}
+                  className="w-full h-full" style={{ objectFit: "contain" }} />
+              )
+            ) : (
+              <div className="w-full h-full" style={{ background: gradientFor(post.id) }} />
+            )}
+            {post.isLocked && <LockedOverlay />}
+
+            {post.mediaType === "video" && !post.isLocked && (
+              <div className="absolute top-4 right-4 rounded-full size-9 flex items-center justify-center"
+                style={{ background: "rgba(0,0,0,0.6)" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
+              </div>
+            )}
+          </div>
+
+          {/* ── Bottom overlay: creator + caption + actions ── */}
+          <div className="absolute bottom-0 left-0 right-0 px-4 pb-5 pt-10"
+            style={{ background: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)" }}>
+
+            {/* Creator row */}
+            <div className="flex items-center gap-2.5 mb-2">
+              <div className="rounded-full overflow-hidden flex-shrink-0"
+                style={{ width: 32, height: 32, border: `1.5px solid ${r.color}` }}>
+                {post.creatorAvatarUrl ? (
+                  <img src={post.creatorAvatarUrl} className="size-full object-cover" alt={post.creatorName} />
+                ) : (
+                  <div className="size-full flex items-center justify-center font-black text-white text-[12px]"
+                    style={{ background: gradientFor(post.creatorId) }}>
+                    {post.creatorName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <p className="text-[13px] font-black text-white flex-1 truncate">{post.creatorName}</p>
+              {!post.isSubscribed && (
+                <button onClick={() => onSubscribe(post.creatorId)}
+                  className="flex-shrink-0 rounded-lg px-3 py-1 text-[10px] font-black border"
+                  style={{ background: `${r.color}20`, borderColor: `${r.color}50`, color: r.color }}>
+                  Subscribe
+                </button>
+              )}
+            </div>
+
+            {/* Caption */}
+            {post.caption && (
+              <p className="text-[12px] text-white/85 leading-snug mb-3 line-clamp-2">
+                {post.isLocked ? <span className="text-white/40">🔒 Subscribe to read the caption…</span> : post.caption}
+              </p>
+            )}
+
+            {/* Actions row */}
+            <div className="flex items-center gap-5">
+              <button onClick={() => onLike(post.id)} className="flex items-center gap-1.5">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill={post.isLiked ? "#ef3976" : "none"}
+                  stroke={post.isLiked ? "#ef3976" : "white"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                </svg>
+                <span className="text-[12px] font-bold text-white">{fmt(post.likeCount)}</span>
+              </button>
+
+              <button onClick={() => setShowMobileComments(true)} className="flex items-center gap-1.5">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+                  stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                <span className="text-[12px] font-bold text-white">{fmt(post.commentCount)}</span>
+              </button>
+
+              <button onClick={() => onBookmark(post.id)} className="ml-auto">
+                <svg width="24" height="24" viewBox="0 0 24 24"
+                  fill={post.isBookmarked ? "#7c3aed" : "none"}
+                  stroke={post.isBookmarked ? "#7c3aed" : "white"}
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Mobile-only: dedicated comments sheet ── */}
+        {showMobileComments && (
+          <MobileCommentsSheet
+            post={post}
+            onClose={() => setShowMobileComments(false)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // ── Desktop: original side-by-side layout, unchanged ─────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(8px)" }}
@@ -161,7 +295,6 @@ function PostModal({ post, onClose, onLike, onBookmark, onSubscribe }: {
           style={{ background: "#0d0d1a", minHeight: 480, maxHeight: "90vh" }}>
           {post.mediaUrl ? (
             post.mediaType === "video" ? (
-              // For videos in the modal: show video player with poster thumbnail
               <video
                 src={post.mediaUrl}
                 poster={post.thumbnailUrl ?? undefined}
@@ -387,6 +520,123 @@ function PostModal({ post, onClose, onLike, onBookmark, onSubscribe }: {
   );
 }
 
+// ─── Mobile-only comments sheet — opens on top of the media view ──────────────
+function MobileCommentsSheet({ post, onClose }: { post: ExplorePost; onClose: () => void }) {
+  const [comment, setComment] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center"
+      style={{ background: "rgba(0,0,0,0.6)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+
+      <div className="w-full flex flex-col overflow-hidden"
+        style={{
+          background:   "#1a1635",
+          borderRadius: "20px 20px 0 0",
+          border:       "1px solid rgba(124,58,237,0.18)",
+          borderBottom: "none",
+          maxHeight:    "75vh",
+          animation:    "slideUpSheet .3s cubic-bezier(.32,.72,0,1)",
+        }}>
+
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-1 flex-shrink-0">
+          <div className="w-10 h-1 rounded-full" style={{ background: "rgba(255,255,255,0.15)" }} />
+        </div>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 pb-3 border-b flex-shrink-0"
+          style={{ borderColor: "rgba(124,58,237,0.12)" }}>
+          <p className="text-[14px] font-black" style={{ color: "#f0eaff" }}>Comments</p>
+          <button onClick={onClose}
+            className="size-8 rounded-xl flex items-center justify-center"
+            style={{ background: "rgba(255,255,255,0.06)", color: "rgba(240,234,255,0.5)" }}>
+            ✕
+          </button>
+        </div>
+
+        {/* Comments list */}
+        <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4 min-h-0">
+          {/* Caption as first comment */}
+          {post.caption && !post.isLocked && (
+            <div className="flex gap-3 pb-3 border-b" style={{ borderColor: "rgba(124,58,237,0.08)" }}>
+              <div className="size-8 rounded-full overflow-hidden flex-shrink-0"
+                style={{ border: "1.5px solid rgba(124,58,237,0.3)" }}>
+                {post.creatorAvatarUrl ? (
+                  <img src={post.creatorAvatarUrl} className="size-full object-cover" />
+                ) : (
+                  <div className="size-full flex items-center justify-center font-black text-white text-[10px]"
+                    style={{ background: gradientFor(post.creatorId) }}>
+                    {post.creatorName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1">
+                <p className="text-[12px] leading-relaxed" style={{ color: "#f0eaff" }}>
+                  <span className="font-black mr-1.5">{post.creatorName}</span>
+                  {post.caption}
+                </p>
+                <p className="text-[10px] mt-1" style={{ color: "rgba(240,234,255,0.35)" }}>{relTime(post.createdAt)}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Placeholder comments — replace with real data */}
+          {!post.isLocked ? (
+            [
+              { user: "fan_user1",  text: "This is amazing! 🔥",            time: "2h"  },
+              { user: "superfan99", text: "Absolutely love this content 💜", time: "5h"  },
+              { user: "user_xyz",   text: "Keep it up! 🙌",                  time: "1d"  },
+            ].map((c, i) => (
+              <div key={i} className="flex gap-3">
+                <div className="size-8 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-black text-white"
+                  style={{ background: GRADIENTS[i % GRADIENTS.length] }}>
+                  {c.user[0].toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-[13px] leading-relaxed" style={{ color: "rgba(240,234,255,0.85)" }}>
+                    <span className="font-black text-[#f0eaff] mr-1.5">{c.user}</span>{c.text}
+                  </p>
+                  <p className="text-[10px] mt-0.5" style={{ color: "rgba(240,234,255,0.3)" }}>{c.time}</p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <span className="text-3xl">🔒</span>
+              <p className="text-[12px] font-bold" style={{ color: "rgba(240,234,255,0.5)" }}>
+                Subscribe to see comments
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Comment input */}
+        {!post.isLocked && (
+          <div className="flex items-center gap-3 px-4 py-3 border-t flex-shrink-0"
+            style={{ borderColor: "rgba(124,58,237,0.12)", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))" }}>
+            <input ref={inputRef} type="text" value={comment} onChange={(e) => setComment(e.target.value)}
+              placeholder="Add a comment…"
+              className="flex-1 bg-transparent outline-none text-[13px]"
+              style={{ color: "#f0eaff", fontFamily: "inherit" }}
+              onKeyDown={(e) => { if (e.key === "Enter" && comment.trim()) setComment(""); }} />
+            {comment.trim() && (
+              <button onClick={() => setComment("")}
+                className="text-[13px] font-black"
+                style={{ color: "#7c3aed" }}>
+                Post
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes slideUpSheet{from{transform:translateY(100%)}to{transform:translateY(0)}}`}</style>
+    </div>
+  );
+}
+
 // ─── Grid tile ────────────────────────────────────────────────────────────────
 
 function GridTile({ post, onClick }: { post: ExplorePost; onClick: () => void }) {
@@ -398,25 +648,33 @@ function GridTile({ post, onClick }: { post: ExplorePost; onClick: () => void })
   return (
     <div
       onClick={onClick}
-      className="relative overflow-hidden rounded-2xl cursor-pointer group"
-      style={{ background: "#13112b", aspectRatio: "1 / 1" }}
+      className="relative overflow-hidden rounded-[18px] cursor-pointer group transition-all duration-300"
+      style={{
+        background:  "#13112b",
+        aspectRatio: "1 / 1",
+        border:      "1px solid rgba(124,58,237,0.1)",
+      }}
     >
       {/* Media — object-contain so nothing is cropped; dark bg fills letterbox */}
       {thumbSrc ? (
         <img
           src={thumbSrc}
           alt={post.caption ?? ""}
-          className="absolute inset-0 w-full h-full transition-transform duration-500 group-hover:scale-105"
+          className="absolute inset-0 w-full h-full transition-transform duration-500 group-hover:scale-[1.03]"
           style={{ objectFit: "contain", background: "#0d0d1a" }}
         />
       ) : (
-        <div className="absolute inset-0 transition-transform duration-500 group-hover:scale-105"
+        <div className="absolute inset-0 transition-transform duration-500 group-hover:scale-[1.03]"
           style={{ background: gradientFor(post.id) }} />
       )}
 
       {/* Subtle dark vignette so overlays are always readable */}
-      <div className="absolute inset-0"
-        style={{ background: "linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 45%)" }} />
+      <div className="absolute inset-0 pointer-events-none"
+        style={{ background: "linear-gradient(to top, rgba(0,0,0,0.5) 0%, transparent 42%)" }} />
+
+      {/* Hover ring */}
+      <div className="absolute inset-0 rounded-[18px] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+        style={{ boxShadow: "inset 0 0 0 1.5px rgba(124,58,237,0.4)" }} />
 
       {/* Video badge — top-right */}
       {post.mediaType === "video" && !post.isLocked && (
@@ -483,11 +741,11 @@ function GridTile({ post, onClick }: { post: ExplorePost; onClick: () => void })
 
 function GridSkeleton() {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
       {[...Array(9)].map((_, i) => (
         <div key={i}
-          className="rounded-2xl animate-pulse"
-          style={{ background: "#1a1635", aspectRatio: "1 / 1" }} />
+          className="rounded-[18px] animate-pulse"
+          style={{ background: "#1a1635", aspectRatio: "1 / 1", border: "1px solid rgba(124,58,237,0.1)" }} />
       ))}
     </div>
   );
@@ -604,21 +862,29 @@ export default function ExploreGrid({ initialPosts = [], currentUserId }: Explor
   }, []);
 
   return (
-    <div className="w-full flex flex-col gap-6"
+    <div className="w-full flex flex-col gap-5"
       style={{ fontFamily: "'Be Vietnam Pro', sans-serif", color: "#f0eaff" }}>
 
       {/* ── Header ── */}
       <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="text-[24px] font-black" style={{ color: "#f0eaff" }}>Discover</h1>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-[22px] font-black leading-tight" style={{ color: "#f0eaff" }}>Discover</h1>
+            <p className="text-[12px] mt-0.5" style={{ color: "rgba(240,234,255,0.4)" }}>
+              Explore content from creators you don't follow yet
+            </p>
+          </div>
+
           {/* Search */}
-          <div className="relative max-w-xs w-full">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px]"
-              style={{ color: "rgba(240,234,255,0.3)" }}>🔍</span>
+          <div className="relative w-full sm:max-w-xs">
+            <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 size-3.5" viewBox="0 0 24 24"
+              fill="none" stroke="rgba(240,234,255,0.35)" strokeWidth="2" strokeLinecap="round">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
             <input type="text" value={search} onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Search posts…"
-              className="w-full rounded-2xl border pl-9 pr-3 py-2 text-[12px] outline-none"
-              style={{ background: "#1a1635", borderColor: "rgba(124,58,237,0.25)", color: "#f0eaff", fontFamily: "inherit" }} />
+              placeholder="Search posts, creators…"
+              className="w-full rounded-2xl border pl-10 pr-4 py-2.5 text-[12px] outline-none transition-all focus:border-[#7c3aed]"
+              style={{ background: "rgba(255,255,255,0.03)", borderColor: "rgba(124,58,237,0.18)", color: "#f0eaff", fontFamily: "inherit" }} />
           </div>
         </div>
 
@@ -628,10 +894,10 @@ export default function ExploreGrid({ initialPosts = [], currentUserId }: Explor
             const active = activeCategory === cat.id;
             return (
               <button key={cat.id} onClick={() => handleCategoryChange(cat.id)}
-                className="rounded-full border px-4 py-1.5 text-[11px] font-black whitespace-nowrap flex-shrink-0 transition-all"
+                className="rounded-full border px-4 py-2 text-[11px] font-black whitespace-nowrap flex-shrink-0 transition-all"
                 style={active
-                  ? { background: "linear-gradient(135deg, #7c3aed, #ef3976)", color: "#fff", border: "none", boxShadow: "0 4px 16px rgba(124,58,237,0.35)" }
-                  : { background: "rgba(255,255,255,0.03)", borderColor: "rgba(124,58,237,0.18)", color: "rgba(240,234,255,0.55)" }
+                  ? { background: "linear-gradient(135deg, #7c3aed, #ef3976)", color: "#fff", border: "1px solid transparent", boxShadow: "0 4px 14px rgba(124,58,237,0.3)" }
+                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(124,58,237,0.15)", color: "rgba(240,234,255,0.5)" }
                 }>
                 {cat.label}
               </button>
@@ -642,27 +908,35 @@ export default function ExploreGrid({ initialPosts = [], currentUserId }: Explor
 
       {/* ── Grid ── */}
       {isLoading ? <GridSkeleton /> : posts.length === 0 ? (
-        <div className="flex flex-col items-center gap-4 py-20">
-          <span className="text-5xl">🔍</span>
-          <p className="text-[15px] font-bold" style={{ color: "rgba(240,234,255,0.4)" }}>No posts found</p>
+        <div className="flex flex-col items-center gap-4 py-24 text-center">
+          <div className="size-16 rounded-3xl flex items-center justify-center text-3xl"
+            style={{ background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.15)" }}>
+            🔍
+          </div>
+          <div>
+            <p className="text-[15px] font-black" style={{ color: "#f0eaff" }}>No posts found</p>
+            <p className="text-[12px] mt-1" style={{ color: "rgba(240,234,255,0.4)" }}>
+              Try a different search or category
+            </p>
+          </div>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
             {posts.map((post) => (
               <GridTile key={post.id} post={post} onClick={() => setSelectedPost(post)} />
             ))}
             {isLoadingMore && [...Array(3)].map((_, i) => (
-              <div key={`skel-${i}`} className="rounded-2xl animate-pulse"
-                style={{ background: "#1a1635", aspectRatio: "1 / 1" }} />
+              <div key={`skel-${i}`} className="rounded-[18px] animate-pulse"
+                style={{ background: "#1a1635", aspectRatio: "1 / 1", border: "1px solid rgba(124,58,237,0.1)" }} />
             ))}
           </div>
 
           {hasMore && !isLoadingMore && (
-            <div className="flex justify-center pt-4">
+            <div className="flex justify-center pt-2">
               <button onClick={handleLoadMore}
-                className="flex items-center gap-2 rounded-xl px-6 py-3 text-[12px] font-black border transition-all"
-                style={{ background: "rgba(124,58,237,0.08)", borderColor: "rgba(124,58,237,0.25)", color: "#a78bfa" }}>
+                className="flex items-center gap-2 rounded-2xl px-6 py-3 text-[12px] font-black border transition-all hover:bg-[rgba(124,58,237,0.12)]"
+                style={{ background: "rgba(124,58,237,0.06)", borderColor: "rgba(124,58,237,0.2)", color: "#a78bfa" }}>
                 Load More
               </button>
             </div>

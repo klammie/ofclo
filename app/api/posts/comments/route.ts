@@ -1,133 +1,162 @@
-// app/api/posts/comments/route.ts
-// GET  ?postId=xxx&cursor=xxx  — fetch paginated comments
-// POST { postId, content }      — post a new comment
-
+// app/api/posts/[postId]/comments/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { assertRole } from "@/lib/auth/guard";
 import { db } from "@/db";
-import { comments, user, profiles, posts } from "@/db/schema";
-import { eq, and, desc, lt, sql } from "drizzle-orm";
+import { comments, posts, creators, agencies, notifications, user, profiles } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { randomUUID } from "crypto";
 
-const PAGE_SIZE = 12;
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<{ postId: string }> }
+) {
+  const { session, error } = await assertRole(req, "user", "creator", "agency");
+  if (error) return error;
 
-// ─── GET ──────────────────────────────────────────────────────────────────────
+  const { postId } = await params;
+  const { content } = await req.json();
 
-export async function GET(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { searchParams } = new URL(req.url);
-  const postId = searchParams.get("postId");
-  const cursor = searchParams.get("cursor"); // createdAt ISO for pagination
-
-  if (!postId) return NextResponse.json({ error: "postId required" }, { status: 400 });
-
-  try {
-    const rows = await db
-      .select({
-        commentId:   comments.id,
-        content:     comments.content,
-        createdAt:   comments.createdAt,
-        userId:      comments.userId,
-        // user fields
-        userName:    user.name,
-        userImage:   user.image,
-        // profile fields (left join — may be null)
-        username:    profiles.username,
-        avatarUrl:   profiles.avatarUrl,
-      })
-      .from(comments)
-      .innerJoin(user,    eq(user.id,     comments.userId))
-      .leftJoin(profiles, eq(profiles.id, comments.userId))
-      .where(
-        and(
-          eq(comments.postId, postId),
-          cursor ? lt(comments.createdAt, new Date(cursor)) : undefined,
-        )
-      )
-      .orderBy(desc(comments.createdAt))
-      .limit(PAGE_SIZE + 1);
-
-    const hasMore = rows.length > PAGE_SIZE;
-    const page    = rows.slice(0, PAGE_SIZE);
-
-    const mapped = page.map((r) => ({
-      id:        r.commentId,
-      content:   r.content,
-      createdAt: r.createdAt.toISOString(),
-      userId:    r.userId,
-      isOwn:     r.userId === session.user.id,
-      user: {
-        name:      r.userName,
-        username:  r.username ?? r.userName.toLowerCase().replace(/\s+/g, "_"),
-        avatarUrl: r.avatarUrl ?? r.userImage ?? null,
-      },
-    }));
-
-    const nextCursor = hasMore
-      ? page[page.length - 1].createdAt
-      : null;
-
-    return NextResponse.json({ comments: mapped, hasMore, cursor: nextCursor });
-
-  } catch (e: any) {
-    console.error("[GET /api/posts/comments]", e?.message);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  if (!content || !content.trim()) {
+    return NextResponse.json({ error: "Comment cannot be empty" }, { status: 400 });
   }
+
+  // Insert comment
+  const [comment] = await db
+    .insert(comments)
+    .values({
+      postId,
+      userId:  session.user.id,
+      content: content.trim(),
+    })
+    .returning();
+
+  // Update comment count
+  await db
+    .update(posts)
+    .set({ commentCount: sql`comment_count + 1` })
+    .where(eq(posts.id, postId));
+
+  // Get commenter info for the notification body + response shape
+  const userData = await db.execute<{
+    user_name:  string;
+    username:   string;
+    avatar_url: string | null;
+  }>(sql`
+    SELECT
+      u.name as user_name,
+      COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
+      p.avatar_url
+    FROM ${user} u
+    LEFT JOIN ${profiles} p ON u.id = p.id
+    WHERE u.id = ${session.user.id}
+  `);
+
+  const userInfo = userData.rows[0];
+
+  // ── Notify creator (and agency) on new comment ──────────────────────────────
+  // Skip if the creator commented on their own post
+  try {
+    const post = await db.query.posts.findFirst({
+      where: eq(posts.id, postId),
+      columns: { creatorId: true, title: true, description: true },
+    });
+
+    if (post && post.creatorId !== session.user.id) {
+      const creator = await db.query.creators.findFirst({
+        where: eq(creators.id, post.creatorId),
+        columns: { userId: true, agencyId: true },
+      });
+
+      if (creator) {
+        const postLabel    = post.title ?? post.description ?? "your post";
+        const commenterName = userInfo?.user_name ?? "Someone";
+        const snippet      = content.trim().length > 60
+          ? content.trim().slice(0, 60) + "…"
+          : content.trim();
+
+        const notifBase = {
+          type:        "new_comment" as const,
+          priority:    "medium"      as const,
+          title:       `New comment on "${postLabel}"`,
+          body:        `${commenterName}: "${snippet}"`,
+          icon:        "💬",
+          actionUrl:   `/posts/${postId}`,
+          actorId:     session.user.id,
+          actorName:   commenterName,
+          actorAvatar: userInfo?.avatar_url ?? null,
+          entityId:    postId,
+          isRead:      false,
+          createdAt:   new Date(),
+        };
+
+        // Notify the creator
+        await db.insert(notifications).values({
+          id:     randomUUID(),
+          userId: creator.userId,
+          ...notifBase,
+        });
+
+        // Notify their agency if they have one
+        if (creator.agencyId) {
+          const agency = await db.query.agencies.findFirst({
+            where: eq(agencies.id, creator.agencyId),
+            columns: { userId: true },
+          }).catch(() => null);
+
+          if (agency) {
+            await db.insert(notifications).values({
+              id:     randomUUID(),
+              userId: agency.userId,
+              ...notifBase,
+            });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Non-fatal
+    console.error("[comments] notification error:", e);
+  }
+
+  return NextResponse.json({
+    comment: {
+      id:         comment.id,
+      content:    comment.content,
+      created_at: comment.createdAt,
+      user_name:  userInfo?.user_name  ?? session.user.name,
+      username:   userInfo?.username   ?? session.user.email.split("@")[0],
+      avatar_url: userInfo?.avatar_url ?? null,
+    },
+  });
 }
 
-// ─── POST ─────────────────────────────────────────────────────────────────────
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ postId: string }> }
+) {
+  const { postId } = await params;
 
-export async function POST(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const commentsList = await db.execute<{
+    id:         string;
+    content:    string;
+    created_at: Date;
+    user_name:  string;
+    username:   string;
+    avatar_url: string | null;
+  }>(sql`
+    SELECT
+      c.id,
+      c.content,
+      c.created_at,
+      u.name as user_name,
+      COALESCE(p.username, SPLIT_PART(u.email, '@', 1)) as username,
+      p.avatar_url
+    FROM ${comments} c
+    JOIN ${user} u ON c.user_id = u.id
+    LEFT JOIN ${profiles} p ON u.id = p.id
+    WHERE c.post_id = ${postId}
+    ORDER BY c.created_at DESC
+  `);
 
-  const { postId, content } = await req.json().catch(() => ({}));
-
-  if (!postId)            return NextResponse.json({ error: "postId required" },           { status: 400 });
-  if (!content?.trim())   return NextResponse.json({ error: "content required" },          { status: 400 });
-  if (content.length > 500) return NextResponse.json({ error: "Comment too long (max 500)" }, { status: 400 });
-
-  try {
-    // Insert comment
-    const [comment] = await db
-      .insert(comments)
-      .values({
-        postId,
-        userId:  session.user.id,
-        content: content.trim(),
-      })
-      .returning();
-
-    // Increment post commentCount cache
-    await db
-      .update(posts)
-      .set({ commentCount: sql`${posts.commentCount} + 1` })
-      .where(eq(posts.id, postId));
-
-    // Fetch the commenter's profile for the response
-    const profile = await db.query.profiles.findFirst({
-      where: eq(profiles.id, session.user.id),
-    });
-
-    return NextResponse.json({
-      comment: {
-        id:        comment.id,
-        content:   comment.content,
-        createdAt: comment.createdAt.toISOString(),
-        userId:    comment.userId,
-        isOwn:     true,
-        user: {
-          name:      session.user.name,
-          username:  profile?.username ?? session.user.name.toLowerCase().replace(/\s+/g, "_"),
-          avatarUrl: profile?.avatarUrl ?? session.user.image ?? null,
-        },
-      },
-    });
-
-  } catch (e: any) {
-    console.error("[POST /api/posts/comments]", e?.message);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
-  }
+  return NextResponse.json({ comments: commentsList.rows });
 }

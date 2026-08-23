@@ -43,12 +43,16 @@ function Counter({ to, suffix = "" }: { to: number; suffix?: string }) {
 }
 
 // ─── Creator card (for how it works / showcase) ───────────────────────────────
-function CreatorShowcaseCard({ name, tag, rarity, color, subscribers, emoji }: {
+function CreatorShowcaseCard({ name, tag, rarity, color, subscribers, emoji, avatarUrl, username }: {
   name: string; tag: string; rarity: string; color: string; subscribers: string; emoji: string;
+  avatarUrl?: string | null; username?: string | null;
 }) {
   return (
-    <div className="rounded-[18px] border overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl group"
-      style={{ background: CARD, borderColor: color + "40", boxShadow: `0 4px 24px ${color}18` }}>
+    <a
+      href={username ? `/${username}` : "/signup"}
+      className="block rounded-[18px] border overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl group cursor-pointer"
+      style={{ background: CARD, borderColor: color + "40", boxShadow: `0 4px 24px ${color}18` }}
+    >
       {/* Banner */}
       <div className="h-24 relative overflow-hidden"
         style={{ background: `linear-gradient(135deg, ${color}30, ${V}20)` }}>
@@ -62,9 +66,12 @@ function CreatorShowcaseCard({ name, tag, rarity, color, subscribers, emoji }: {
       </div>
       {/* Avatar */}
       <div className="px-4 -mt-6 relative z-10">
-        <div className="size-12 rounded-full flex items-center justify-center font-black text-white border-2 text-[16px]"
+        <div className="size-12 rounded-full overflow-hidden flex items-center justify-center font-black text-white border-2 text-[16px]"
           style={{ background: `linear-gradient(135deg, ${color}60, ${V}40)`, borderColor: color }}>
-          {name[0]}
+          {avatarUrl
+            ? <img src={avatarUrl} alt={name} className="size-full object-cover" />
+            : name[0]
+          }
         </div>
       </div>
       <div className="px-4 pt-2 pb-4">
@@ -75,13 +82,13 @@ function CreatorShowcaseCard({ name, tag, rarity, color, subscribers, emoji }: {
           </svg>
         </div>
         <p className="text-[11px] mb-2" style={{ color: MUTED }}>{tag}</p>
-        <p className="text-[10px] font-bold mb-3" style={{ color: color }}>{subscribers} subscribers</p>
-        <button className="w-full py-2 rounded-xl text-[11px] font-black border transition-all group-hover:opacity-90"
+        <p className="text-[10px] font-bold mb-3" style={{ color }}>{subscribers} subscribers</p>
+        <div className="w-full py-2 rounded-xl text-[11px] font-black border text-center transition-all group-hover:opacity-90"
           style={{ background: color + "18", borderColor: color + "40", color }}>
-          Subscribe
-        </button>
+          View Profile
+        </div>
       </div>
-    </div>
+    </a>
   );
 }
 
@@ -191,7 +198,24 @@ function FanPassPreview() {
 }
 
 // ─── MAIN LANDING PAGE ────────────────────────────────────────────────────────
-export default function LandingPage() {
+interface FeaturedCreator {
+  id:              string;
+  userId:          string;
+  name:            string;
+  username:        string;
+  avatarUrl:       string | null;
+  coverUrl:        string | null;
+  subscriberCount: number;
+  bio:             string | null;
+  rarity:          "common" | "rare" | "epic" | "legendary";
+  standardPrice:   number | null;
+}
+
+interface LandingPageProps {
+  featuredCreators?: FeaturedCreator[];
+}
+
+export default function LandingPage({ featuredCreators = [] }: LandingPageProps) {
   return (
     <div style={{ background: BG, color: TEXT, fontFamily: "'Be Vietnam Pro', sans-serif", overflowX: "hidden" }}>
 
@@ -201,7 +225,7 @@ export default function LandingPage() {
       {/* ══════════════════════════════════════════════════════════════
           HERO
       ══════════════════════════════════════════════════════════════ */}
-      <section className="relative min-h-screen flex items-center justify-center px-6 pt-24 pb-16 overflow-hidden">
+      <section className="relative min-h-screen flex items-center justify-center px-6 pt-20 pb-16 overflow-hidden">
         {/* Bg glows */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-0 left-1/4 w-[600px] h-[600px] rounded-full opacity-20"
@@ -305,10 +329,40 @@ export default function LandingPage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            <CreatorShowcaseCard name="Alysia Megan"  tag="Lifestyle & Wellness"  rarity="Legendary" color="#fbbf24" subscribers="42.1k" emoji="✨" />
-            <CreatorShowcaseCard name="Kira Shanon"   tag="Art & Fashion"         rarity="Epic"      color="#a78bfa" subscribers="8.2k"  emoji="🎨" />
-            <CreatorShowcaseCard name="Jasun Luv"     tag="Gaming & Entertainment" rarity="Rare"     color="#38bdf8" subscribers="1.2k"  emoji="🎮" />
-            <CreatorShowcaseCard name="Nova Dreams"   tag="Music & Vibes"         rarity="Common"    color="#94a3b8" subscribers="45"    emoji="🎵" />
+            {featuredCreators.length > 0 ? (
+              featuredCreators.map((c) => {
+                const RARITY_CONFIG = {
+                  legendary: { color: "#fbbf24", label: "Legendary", emoji: "✨" },
+                  epic:      { color: "#a78bfa", label: "Epic",      emoji: "💎" },
+                  rare:      { color: "#38bdf8", label: "Rare",      emoji: "⭐" },
+                  common:    { color: "#94a3b8", label: "Common",    emoji: "🌟" },
+                };
+                const rc = RARITY_CONFIG[c.rarity] ?? RARITY_CONFIG.common;
+                const subs = c.subscriberCount >= 1000
+                  ? `${(c.subscriberCount / 1000).toFixed(1)}k`
+                  : String(c.subscriberCount);
+                return (
+                  <CreatorShowcaseCard
+                    key={c.id}
+                    name={c.name}
+                    tag={c.bio?.slice(0, 30) ?? "Creator"}
+                    rarity={rc.label}
+                    color={rc.color}
+                    subscribers={subs}
+                    emoji={rc.emoji}
+                    avatarUrl={c.avatarUrl}
+                    username={c.username}
+                  />
+                );
+              })
+            ) : (
+              <>
+                <CreatorShowcaseCard name="Alysia Megan"  tag="Lifestyle & Wellness"   rarity="Legendary" color="#fbbf24" subscribers="42.1k" emoji="✨" />
+                <CreatorShowcaseCard name="Kira Shanon"   tag="Art & Fashion"           rarity="Epic"      color="#a78bfa" subscribers="8.2k"  emoji="🎨" />
+                <CreatorShowcaseCard name="Jasun Luv"     tag="Gaming & Entertainment"  rarity="Rare"      color="#38bdf8" subscribers="1.2k"  emoji="🎮" />
+                <CreatorShowcaseCard name="Nova Dreams"   tag="Music & Vibes"           rarity="Common"    color="#94a3b8" subscribers="45"    emoji="🎵" />
+              </>
+            )}
           </div>
 
           {/* Rarity legend */}

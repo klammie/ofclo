@@ -18,10 +18,15 @@ import type {
   BuyCoinsRequest,
   BuyCoinsResponse,
 } from "@/lib/types";
+import { createPaymentSession, maxelpayCallbackUrl, maxelpayPublicUrl } from "@/lib/maxelpay";
+import { maxelpaySessions } from "@/db/schema";
+ import { userCoinBalance } from "@/db/schema"; // add this import if not already there
+
 
 // ─── Platform fee (%) ─────────────────────────────────────────────────────────
 const PLATFORM_FEE_PCT = 20;
 const WITHDRAW_MIN_CENTS = 2000; // $20 minimum withdrawal
+
 
 // ─── Get or create wallet ─────────────────────────────────────────────────────
 
@@ -103,93 +108,60 @@ export async function getCoinPackages(): Promise<CoinPackage[]> {
 
 // ─── Initiate deposit (card → Maxelpay, crypto → invoice) ────────────────────
 
+
+
+
+
+// ── Initiate deposit (card → MaxelPay checkout session) ──────────────────────
 export async function initiateDeposit(
   userId: string,
   req: DepositRequest
 ): Promise<DepositResponse> {
-  if (req.amountCents < 100) throw new Error("INVALID_AMOUNT"); // min $1
+  if (req.amountCents < 100) throw new Error("INVALID_AMOUNT");
 
   const txId = randomUUID();
+  const orderId = `dep_${txId}`;
 
-  // Create pending transaction
   await db.insert(walletTransactions).values({
     id: txId,
     userId,
-    type: req.method === "crypto" ? "crypto_deposit" : "deposit",
+    type: "deposit",
     status: "pending",
-    currency: req.method === "crypto" ? "crypto" : "usd",
+    currency: "usd",
     amountCents: req.amountCents,
     coinsAmount: 0,
-    description: `Deposit $${(req.amountCents / 100).toFixed(2)} via ${req.method}`,
+    description: `Deposit $${(req.amountCents / 100).toFixed(2)}`,
     externalTxId: null,
   });
 
-  if (req.method === "card") {
-    // ── Maxelpay integration (wire this up later) ──────────────────────────
-    // const checkout = await maxelpay.createCheckout({
-    //   amount: req.amountCents,
-    //   currency: "USD",
-    //   orderId: txId,
-    //   returnUrl: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/user/wallet?deposit=success`,
-    //   cancelUrl: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/user/wallet?deposit=cancelled`,
-    //   metadata: { userId, txId },
-    // });
-    // return { success: true, transactionId: txId, checkoutUrl: checkout.url };
+ const session = await createPaymentSession({
+  orderId,
+  amount:      req.amountCents / 100,
+  currency:    "USD",
+  description: `Wallet deposit — $${(req.amountCents / 100).toFixed(2)}`,
+  successUrl:  `${maxelpayPublicUrl()}/dashboard/user/wallet?deposit=success`,
+  cancelUrl:   `${maxelpayPublicUrl()}/dashboard/user/wallet?deposit=cancelled`,
+  callbackUrl: maxelpayCallbackUrl(),
+});
 
-    return {
-      success: true,
-      transactionId: txId,
-      checkoutUrl: `/dashboard/user/wallet?deposit=pending&txId=${txId}`,
-      // ↑ Replace with real Maxelpay checkout URL when ready
-    };
-  }
-
-  // ── Crypto deposit ─────────────────────────────────────────────────────────
-  const cryptoCurrency = req.cryptoCurrency ?? "USDT";
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 min
-
-  // Mock crypto rate conversion (replace with real rate API)
-  const mockRates: Record<string, number> = {
-    BTC:  0.0000165,
-    ETH:  0.000526,
-    USDT: 1.0,
-    USDC: 1.0,
-    LTC:  0.0128,
-  };
-  const rate = mockRates[cryptoCurrency] ?? 1;
-  const cryptoAmount = (req.amountCents / 100 * rate).toFixed(6);
-
-  // Mock wallet address (replace with your crypto payment provider)
-  const mockAddresses: Record<string, string> = {
-    BTC:  "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
-    ETH:  "0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
-    USDT: "TKFiMkbSqvqnJBV2uJTmkVFMiPQjhKFwXg",
-    USDC: "0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
-    LTC:  "LVsMhpYq31RXKzBFNgGdCTjR9AvJDJCBr5",
-  };
-  const walletAddress = mockAddresses[cryptoCurrency] ?? mockAddresses.USDT;
-
-  // Create crypto invoice
-  const invoiceId = randomUUID();
-  await db.insert(cryptoInvoices).values({
-    id: invoiceId,
+  await db.insert(maxelpaySessions).values({
+    sessionId:   session.sessionId,
+    orderId,
     userId,
-    transactionId: txId,
-    cryptoCurrency,
-    cryptoAmount,
-    walletAddress,
-    usdAmountCents: req.amountCents,
-    status: "pending",
-    expiresAt,
+    purpose:     "deposit",
+    linkedTxId:  txId,
+    amountCents: req.amountCents,
+    status:      "pending",
   });
+
+  await db.update(walletTransactions)
+    .set({ externalTxId: session.sessionId })
+    .where(eq(walletTransactions.id, txId));
 
   return {
     success: true,
     transactionId: txId,
-    cryptoAddress: walletAddress,
-    cryptoAmount,
-    cryptoCurrency,
-    expiresAt: expiresAt.toISOString(),
+    checkoutUrl: session.checkoutUrl,
   };
 }
 
@@ -269,79 +241,92 @@ export async function initiateWithdrawal(
 
 // ─── Buy coins with USD balance ───────────────────────────────────────────────
 
+
 export async function buyCoins(
   userId: string,
   req: BuyCoinsRequest
 ): Promise<BuyCoinsResponse> {
+  console.log("[buyCoins] request:", { userId, packageId: req.packageId, method: req.method });
+
   const pkg = await db.query.coinPackages.findFirst({
     where: and(eq(coinPackages.id, req.packageId), eq(coinPackages.isActive, true)),
   });
+
+  console.log("[buyCoins] package found:", pkg);
+
   if (!pkg) throw new Error("INVALID_AMOUNT");
 
   const totalCoins = pkg.coins + pkg.bonusCoins;
+  console.log("[buyCoins] totalCoins:", totalCoins);
 
-  if (req.method === "usd_balance") {
-    const wallet = await getOrCreateWallet(userId);
-    if (!wallet) throw new Error("SERVER_ERROR");
-    if (wallet.usdBalance < pkg.priceCents) throw new Error("INSUFFICIENT_FUNDS");
+ 
+// Inside buyCoins, replace the Promise.all with this:
+if (req.method === "usd_balance") {
+  const wallet = await getOrCreateWallet(userId);
+  if (!wallet) throw new Error("SERVER_ERROR");
+  if (wallet.usdBalance < pkg.priceCents) throw new Error("INSUFFICIENT_FUNDS");
 
-    const txId = randomUUID();
+  const txId = randomUUID();
 
-    await Promise.all([
-      // Deduct USD
-      db.update(userWallet)
-        .set({
-          usdBalance: sql`${userWallet.usdBalance} - ${pkg.priceCents}`,
-          coinsBalance: sql`${userWallet.coinsBalance} + ${totalCoins}`,
-          lifetimeSpent: sql`${userWallet.lifetimeSpent} + ${pkg.priceCents}`,
-          lifetimeCoinsEarned: sql`${userWallet.lifetimeCoinsEarned} + ${totalCoins}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(userWallet.userId, userId)),
-
-      // Log spend
-      db.insert(walletTransactions).values({
-        id: txId,
-        userId,
-        type: "coin_purchase",
-        status: "completed",
-        currency: "coins",
-        amountCents: pkg.priceCents,
-        coinsAmount: totalCoins,
-        description: `Purchased ${totalCoins.toLocaleString()} coins${pkg.bonusCoins > 0 ? ` (+${pkg.bonusCoins} bonus)` : ""}`,
-      }),
-    ]);
-
-    const updated = await getOrCreateWallet(userId);
-
-    return {
-      success: true,
-      coinsAdded: totalCoins,
-      newCoinBalance: updated?.coinsBalance ?? 0,
-      newUsdBalance: updated?.usdBalance ?? 0,
-      transactionId: txId,
-    };
-  }
-
-  // card / crypto — initiate payment flow same as deposit
-  const depositResult = await initiateDeposit(userId, {
-    amountCents: pkg.priceCents,
-    method: req.method === "card" ? "card" : "crypto",
-    cryptoCurrency: req.cryptoCurrency as any,
+  // Check if userCoinBalance row exists
+  const existingCoinBalance = await db.query.userCoinBalance.findFirst({
+    where: eq(userCoinBalance.userId, userId),
   });
 
+  await Promise.all([
+    // Update userWallet
+    db.update(userWallet)
+      .set({
+        usdBalance:          sql`${userWallet.usdBalance} - ${pkg.priceCents}`,
+        coinsBalance:        sql`${userWallet.coinsBalance} + ${totalCoins}`,
+        lifetimeSpent:       sql`${userWallet.lifetimeSpent} + ${pkg.priceCents}`,
+        lifetimeCoinsEarned: sql`${userWallet.lifetimeCoinsEarned} + ${totalCoins}`,
+        updatedAt:           new Date(),
+      })
+      .where(eq(userWallet.userId, userId)),
+
+    // Sync userCoinBalance — this is what the shop reads
+    existingCoinBalance
+      ? db.update(userCoinBalance)
+          .set({
+            balance:        sql`${userCoinBalance.balance} + ${totalCoins}`,
+            lifetimeEarned: sql`${userCoinBalance.lifetimeEarned} + ${totalCoins}`,
+            updatedAt:      new Date(),
+          })
+          .where(eq(userCoinBalance.userId, userId))
+      : db.insert(userCoinBalance).values({
+          userId,
+          balance:        totalCoins,
+          lifetimeEarned: totalCoins,
+          lifetimeSpent:  0,
+          updatedAt:      new Date(),
+        }),
+
+    // Log the transaction
+    db.insert(walletTransactions).values({
+      id:          txId,
+      userId,
+      type:        "coin_purchase",
+      status:      "completed",
+      currency:    "coins",
+      amountCents: pkg.priceCents,
+      coinsAmount: totalCoins,
+      description: `Purchased ${totalCoins.toLocaleString()} coins${pkg.bonusCoins > 0 ? ` (+${pkg.bonusCoins} bonus)` : ""}`,
+    }),
+  ]);
+
+  const updated = await getOrCreateWallet(userId);
+
   return {
-    success: true,
-    coinsAdded: 0, // coins credited after payment completes via webhook
-    newCoinBalance: 0,
-    newUsdBalance: 0,
-    transactionId: depositResult.transactionId,
-    checkoutUrl: depositResult.checkoutUrl,
-    cryptoAddress: depositResult.cryptoAddress,
-    cryptoAmount: depositResult.cryptoAmount,
-    cryptoCurrency: depositResult.cryptoCurrency,
-    expiresAt: depositResult.expiresAt,
+    success:        true,
+    coinsAdded:     totalCoins,
+    newCoinBalance: updated?.coinsBalance ?? 0,
+    newUsdBalance:  updated?.usdBalance   ?? 0,
+    transactionId:  txId,
   };
+}
+
+  // ... rest of the function unchanged
 }
 
 // ─── Seed default coin packages ───────────────────────────────────────────────

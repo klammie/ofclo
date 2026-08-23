@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { signOut } from "@/lib/auth/client";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import StatusModal from "../status/StatusModal";
+import { AgencyNotificationBell } from "../agency/AgencyNotificationBell";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const V    = "#7c3aed";
@@ -38,6 +39,10 @@ export function Topbar2({ user }: TopbarProps) {
     setIsSigningOut(true);
     setDropdownOpen(false);
     try {
+      // Clear any active impersonation session before signing out
+      // so the cookies don't persist and affect the next login
+      await fetch("/api/agency/stop-impersonate", { method: "POST" }).catch(() => {});
+
       await signOut({
         fetchOptions: {
           onSuccess: () => router.push("/login"),
@@ -74,12 +79,28 @@ export function Topbar2({ user }: TopbarProps) {
           borderBottom: "1px solid rgba(124,58,237,0.12)",
         }}
       >
-        {/* ── Left: empty or logo placeholder ── */}
-        <div />
+        {/* ── Left: Fanz Luv logo on mobile only (sidebar already shows it on desktop) ── */}
+        <div className="flex items-center gap-2 lg:hidden">
+          <div
+            className="size-7 rounded-lg flex items-center justify-center font-black text-white text-[13px] flex-shrink-0"
+            style={{ background: GRAD }}
+          >
+            F
+          </div>
+          <span className="text-[15px] font-black" style={{ color: "#f0eaff" }}>
+            Fanz Luv
+          </span>
+        </div>
+        {/* Empty spacer on desktop so right-side items stay right-aligned */}
+        <div className="hidden lg:block" />
 
         {/* ── Right: notifications + avatar menu ── */}
-        <div className="flex items-center gap-2">
-          <NotificationBell />
+        {/* ── Right: notifications + avatar menu ── */}
+      <div className="flex items-center gap-2">
+        {user.role === "agency" || user.role === "creator"
+          ? <AgencyNotificationBell />
+          : <NotificationBell />
+        }
 
           {/* Avatar + dropdown */}
           <div ref={dropdownRef} className="relative">

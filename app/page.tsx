@@ -1,14 +1,12 @@
+// app/page.tsx
+import { getFeaturedCreators } from "@/lib/queries/featured-creators";
+import LandingPage from "@/components/landing/LandingPageShell";
 
-import { getSession } from "./lib/auth";
-import { redirect } from "next/navigation";
-import LandingPageShell from "@/components/landing/LandingPageShell";
-;
+// Revalidate every 10 minutes so creators rotate without full rebuilds
+export const revalidate = 600;
 
-const LandingPage = async () => {
-  const session = await getSession();
+export default async function HomePage() {
+  const featuredCreators = await getFeaturedCreators();
 
-  if (session) redirect("/dashboard/user/feed")
-  return <LandingPageShell />;
-};
-
-export default LandingPage;
+  return <LandingPage featuredCreators={featuredCreators} />;
+}

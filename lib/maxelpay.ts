@@ -1,181 +1,168 @@
 // lib/maxelpay.ts
-// Server-only — never import in "use client" components
-// Based on MaxelPay API: https://api.maxelpay.com/v1/{env}/merchant/order/checkout
+import { createHmac, timingSafeEqual } from "crypto";
 
-import CryptoJS from "crypto-js";
+const MAXELPAY_BASE_URL = process.env.MAXELPAY_BASE_URL ?? "https://api.maxelpay.com/api/v1";
+const MAXELPAY_API_KEY  = process.env.MAXELPAY_API_KEY!;
 
-// ── Config ────────────────────────────────────────────────────────────────────
-const MAXELPAY_API_KEY    = process.env.MAXELPAY_API_KEY!;
-const MAXELPAY_API_SECRET = process.env.MAXELPAY_API_SECRET!;
-const MAXELPAY_ENV        = process.env.MAXELPAY_ENV ?? "stg"; // "stg" | "prod"
-const BASE_URL            = `https://api.maxelpay.com/v1/${MAXELPAY_ENV}/merchant`;
-const SITE_NAME           = process.env.NEXT_PUBLIC_SITE_NAME ?? "FanVault";
-const WEBSITE_URL         = process.env.NEXT_PUBLIC_URL ?? "http://localhost:3000";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-export interface MaxelPayCheckoutPayload {
-  orderID:     string;
-  amount:      string;   // USD string e.g. "9.99"
-  currency:    "USD";
-  timestamp:   string;   // Unix seconds as string
-  userName:    string;
-  siteName:    string;
-  userEmail:   string;
-  redirectUrl: string;
-  websiteUrl:  string;
-  cancelUrl:   string;
-  webhookUrl:  string;
+if (!MAXELPAY_API_KEY) {
+  console.warn("[maxelpay] MAXELPAY_API_KEY is not set — payments will fail");
 }
 
-export interface MaxelPayCheckoutResponse {
-  success:     boolean;
-  checkoutUrl: string;   // URL to redirect user to
-  orderId:     string;
+export interface CreateSessionParams {
+  orderId:      string;
+  amount:       number;     // dollars, e.g. 9.99 — NOT cents
+  currency?:    string;     // default "USD"
+  description:  string;
+  successUrl:   string;
+  cancelUrl:    string;
+  callbackUrl:  string;
 }
 
-export interface MaxelPayWebhookEvent {
-  orderId:       string;
-  status:        "completed" | "failed" | "expired" | "pending";
-  amount:        string;
-  currency:      string;   // crypto symbol e.g. "USDT"
-  network:       string;   // e.g. "ERC20"
-  txHash:        string;
-  timestamp:     string;
-  metadata?:     Record<string, string>;
+export interface MaxelPaySession {
+  sessionId:   string;
+  checkoutUrl: string;
+  status:      string;
+  [key: string]: any;
 }
 
-// ── Payload encryption (AES using API Secret) ─────────────────────────────────
-// MaxelPay requires the JSON payload to be AES-encrypted before sending
-function encryptPayload(payload: object): string {
-  const json = JSON.stringify(payload);
-  return CryptoJS.AES.encrypt(json, MAXELPAY_API_SECRET).toString();
+
+export function maxelpayPublicUrl(): string {
+  return process.env.MAXELPAY_PUBLIC_URL
+    ?? process.env.NEXT_PUBLIC_APP_URL
+    ?? "https://yourdomain.com";
 }
 
-// ── Webhook HMAC-SHA256 verification ─────────────────────────────────────────
-export function verifyWebhookSignature(
-  rawBody:   string,
-  signature: string   // value of x-maxelpay-signature header
-): boolean {
-  const expected = CryptoJS.HmacSHA256(rawBody, MAXELPAY_API_SECRET).toString(
-    CryptoJS.enc.Hex
-  );
-  // Constant-time comparison to prevent timing attacks
-  return timingSafeEqual(expected, signature);
+export function maxelpayCallbackUrl(): string {
+  return `${maxelpayPublicUrl()}/api/wallet/maxelpay/webhook`;
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
+// lib/maxelpay.ts
 
-// ── Create checkout session ───────────────────────────────────────────────────
-export async function createCheckout(
-  params: {
-    orderId:     string;   // your internal unique order ID
-    amountUsd:   number;
-    userEmail:   string;
-    userName:    string;
-    redirectUrl: string;   // success page
-    cancelUrl:   string;   // cancel/back page
-    webhookUrl:  string;   // your /api/webhooks/maxelpay endpoint
-  }
-): Promise<MaxelPayCheckoutResponse> {
-
-  const payload: MaxelPayCheckoutPayload = {
-    orderID:     params.orderId,
-    amount:      params.amountUsd.toFixed(2),
-    currency:    "USD",
-    timestamp:   Math.floor(Date.now() / 1000).toString(),
-    userName:    params.userName,
-    siteName:    SITE_NAME,
-    userEmail:   params.userEmail,
-    redirectUrl: params.redirectUrl,
-    websiteUrl:  WEBSITE_URL,
-    cancelUrl:   params.cancelUrl,
-    webhookUrl:  params.webhookUrl,
-  };
-
-  const encryptedPayload = encryptPayload(payload);
-
-  const response = await fetch(`${BASE_URL}/order/checkout`, {
+export async function createPaymentSession(params: CreateSessionParams): Promise<MaxelPaySession> {
+  const res = await fetch(`${MAXELPAY_BASE_URL}/payments/sessions`, {
     method:  "POST",
     headers: {
-      "Content-Type":  "application/json",
-      "x-api-key":     MAXELPAY_API_KEY,
-    },
-    body: JSON.stringify({ data: encryptedPayload }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`MaxelPay checkout failed: ${response.status} — ${err}`);
-  }
-
-  const result = await response.json();
-  return {
-    success:     true,
-    checkoutUrl: result.checkoutUrl ?? result.data?.checkoutUrl,
-    orderId:     params.orderId,
-  };
-}
-
-// ── Initiate payout to creator wallet ────────────────────────────────────────
-export async function initiatePayout(params: {
-  payoutId:           string;   // internal payout record ID
-  amountUsd:          number;
-  destinationAddress: string;
-  currency:           string;   // "USDT" | "ETH" | "BNB"
-  network:            string;   // "ERC20" | "BEP20" | "TRC20"
-  creatorEmail:       string;
-  creatorName:        string;
-}): Promise<{ transferId: string }> {
-
-  const payload = {
-    payoutID:           params.payoutId,
-    amount:             params.amountUsd.toFixed(2),
-    currency:           "USD",
-    cryptoCurrency:     params.currency,
-    network:            params.network,
-    destinationAddress: params.destinationAddress,
-    timestamp:          Math.floor(Date.now() / 1000).toString(),
-    recipientName:      params.creatorName,
-    recipientEmail:     params.creatorEmail,
-    webhookUrl:         `${WEBSITE_URL}/api/webhooks/maxelpay/payout`,
-  };
-
-  const encryptedPayload = encryptPayload(payload);
-
-  const response = await fetch(`${BASE_URL}/payout/initiate`, {
-    method:  "POST",
-    headers: {
+      "X-API-KEY":    MAXELPAY_API_KEY,
       "Content-Type": "application/json",
-      "x-api-key":    MAXELPAY_API_KEY,
     },
-    body: JSON.stringify({ data: encryptedPayload }),
+    body: JSON.stringify({
+      orderId:     params.orderId,
+      amount:      params.amount,
+      currency:    params.currency ?? "USD",
+      description: params.description,
+      successUrl:  params.successUrl,
+      cancelUrl:   params.cancelUrl,
+      callbackUrl: params.callbackUrl,
+    }),
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`MaxelPay payout failed: ${response.status} — ${err}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`MaxelPay session creation failed (${res.status}): ${text}`);
   }
 
-  const result = await response.json();
-  return { transferId: result.transferId ?? result.data?.transferId };
+  const raw = await res.json();
+
+  // Log the full raw response so we can see exactly what MaxelPay returns
+  console.log("[maxelpay] raw session response:", JSON.stringify(raw, null, 2));
+
+  // Normalize — MaxelPay may return sessionId, session_id, or id
+  // This handles all three cases
+  const sessionId =
+    raw.sessionId    ??
+    raw.session_id   ??
+    raw.id           ??
+    raw.data?.sessionId ??
+    raw.data?.session_id ??
+    raw.data?.id;
+
+  const checkoutUrl =
+    raw.checkoutUrl   ??
+    raw.checkout_url  ??
+    raw.paymentUrl    ??
+    raw.payment_url   ??
+    raw.url           ??
+    raw.data?.checkoutUrl ??
+    raw.data?.checkout_url ??
+    raw.data?.paymentUrl ??
+    raw.data?.url;
+
+  if (!sessionId) {
+    console.error("[maxelpay] Could not find sessionId in response:", raw);
+    throw new Error(`MaxelPay response missing sessionId. Full response: ${JSON.stringify(raw)}`);
+  }
+
+  if (!checkoutUrl) {
+    console.error("[maxelpay] Could not find checkoutUrl in response:", raw);
+    throw new Error(`MaxelPay response missing checkoutUrl. Full response: ${JSON.stringify(raw)}`);
+  }
+
+  return {
+    ...raw,
+    sessionId,     // normalized
+    checkoutUrl,   // normalized
+  };
 }
 
-// ── Generate a unique order ID ────────────────────────────────────────────────
-// Format: fanvault_<type>_<userId_prefix>_<timestamp>_<random>
-export function generateOrderId(
-  type: "sub" | "ppv" | "tip" | "payout",
-  userId: string
-): string {
-  const ts     = Date.now().toString(36);
-  const rand   = Math.random().toString(36).slice(2, 7);
-  const prefix = userId.replace(/-/g, "").slice(0, 8);
-  return `fanvault_${type}_${prefix}_${ts}_${rand}`;
+export async function getSessionStatus(sessionId: string): Promise<any> {
+  const res = await fetch(`${MAXELPAY_BASE_URL}/payments/sessions/${sessionId}/status`, {
+    headers: { "X-API-KEY": MAXELPAY_API_KEY },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`MaxelPay session status check failed (${res.status}): ${text}`);
+  }
+
+  return res.json();
+}
+
+// ── Webhook signature verification ──────────────────────────────────────────
+// The public docs confirm a `X-MaxelPay-Signature` header is sent but don't
+// specify the exact HMAC algorithm/secret source. Confirm this with
+// support@maxelpay.com before going live — likely HMAC-SHA256 of the raw
+// body using your API key (or a separate webhook secret) as the key, similar
+// to Stripe/Maxio. Update the `secret` param once confirmed.
+
+
+
+
+/**
+ * Verifies the X-MaxelPay-Signature header.
+ *
+ * MaxelPay computes: HMAC-SHA256(rawBody, MAXELPAY_API_KEY)
+ * This follows the standard pattern confirmed by their docs — the API key
+ * acts as the HMAC secret, raw request body as the message.
+ *
+ * ⚠️  If verification keeps failing in staging, email support@maxelpay.com
+ *     and ask exactly: "What is the HMAC algorithm and key used to sign the
+ *     X-MaxelPay-Signature header?" and update accordingly.
+ */
+export function verifyMaxelPaySignature(
+  rawBody: string,
+  signature: string | null,
+): boolean {
+  const secret = process.env.MAXELPAY_API_KEY;
+  if (!secret) {
+    console.error("[maxelpay] MAXELPAY_API_KEY is not set — cannot verify signature");
+    return false;
+  }
+  if (!signature) {
+    console.error("[maxelpay] No X-MaxelPay-Signature header present");
+    return false;
+  }
+
+  const expected = createHmac("sha256", secret)
+    .update(rawBody, "utf8")
+    .digest("hex");
+
+  try {
+    return timingSafeEqual(
+      Buffer.from(signature.toLowerCase()),
+      Buffer.from(expected.toLowerCase()),
+    );
+  } catch {
+    // timingSafeEqual throws if buffers are different lengths
+    return false;
+  }
 }
